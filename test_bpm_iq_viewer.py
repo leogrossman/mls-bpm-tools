@@ -14,6 +14,8 @@ from bpm_iq_viewer import (
     pv_for,
     read_button_phasors,
     spectrum,
+    tune_markers_from_values,
+    tune_value_to_frequency,
 )
 
 
@@ -31,6 +33,8 @@ class BPMIQViewerTest(unittest.TestCase):
             combination_expression(data, "mean(A,B,C,D)"),
             np.mean(np.vstack([data["A"], data["B"], data["C"], data["D"]]), axis=0),
         )
+        np.testing.assert_allclose(combination_expression(data, "conj(A)"), np.conjugate(data["A"]))
+        np.testing.assert_allclose(combination_expression(data, "abs(A)"), np.abs(data["A"]))
 
     def test_combination_expression_blocks_unknown_names(self):
         data = {"A": np.array([1 + 0j])}
@@ -81,6 +85,14 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertTrue(all(value.shape == (128,) for value in phasors.values()))
         self.assertTrue(all(np.iscomplexobj(value) for value in phasors.values()))
 
+    def test_default_config_has_ring_bpms_tunes_and_fast_scalar_timeout(self):
+        cfg = AppConfig.load(Path(__file__).with_name("bpm_config.json"))
+
+        self.assertGreaterEqual(len(cfg.bpms), 28)
+        self.assertTrue(any(bpm.name == "BPMZ1L2RP" and bpm.x_pv == "BPMZ1L2RP:rdX" for bpm in cfg.bpms))
+        self.assertEqual([item.pv for item in cfg.tune_pvs], ["TUNEZRP:measX", "TUNEZRP:measY", "TUNEZRP:measZ"])
+        self.assertLessEqual(cfg.epics_scalar_timeout_s, 0.5)
+
     def test_spectrum_peak_near_known_signal(self):
         fs = 1000.0
         n = np.arange(2048)
@@ -89,6 +101,19 @@ class BPMIQViewerTest(unittest.TestCase):
         freq, power = spectrum(x, fs)
 
         self.assertAlmostEqual(freq[np.argmax(power)], 125.0, delta=fs / x.size)
+
+    def test_tune_value_conversion_and_harmonic_markers(self):
+        freq, tune = tune_value_to_frequency(0.2, 1000.0, "auto")
+        self.assertEqual(freq, 200.0)
+        self.assertEqual(tune, 0.2)
+
+        markers = tune_markers_from_values(
+            {"Qx": {"value": 0.2, "unit": "auto", "color": "blue", "harmonics": 3}},
+            fs=1000.0,
+            include_harmonics=True,
+        )
+
+        self.assertEqual([item[0] for item in markers], [200.0, 400.0])
 
     def test_session_logger_writes_jsonl_event(self):
         with tempfile.TemporaryDirectory() as tmp:

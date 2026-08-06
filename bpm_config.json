@@ -2,45 +2,111 @@
   "sample_rate_hz": 6250000.0,
   "ddc_frequency_hz": null,
   "refresh_ms": 1000,
+  "epics_array_timeout_s": 2.0,
+  "epics_scalar_timeout_s": 0.25,
   "pv_templates": {
     "scan": "{bpm}:signals:ddc_raw.SCAN",
     "i": "{bpm}:signals:ddc_raw.I{button}",
     "q": "{bpm}:signals:ddc_raw.Q{button}"
   },
+  "tune_pvs": [
+    {"label": "Qx", "pv": "TUNEZRP:measX", "color": "#1f77b4", "unit": "auto", "harmonics": 6},
+    {"label": "Qy", "pv": "TUNEZRP:measY", "color": "#d62728", "unit": "auto", "harmonics": 6},
+    {"label": "Qz", "pv": "TUNEZRP:measZ", "color": "#2ca02c", "unit": "auto", "harmonics": 10}
+  ],
   "status_pvs": [
     {
-      "label": "Phase noise generator",
-      "pv": "TODO:PHASE:NOISE:ENABLE",
-      "on_values": ["1", "ON", "On", "on", "Enabled"],
-      "direction": "longitudinal",
-      "excitation": "phase noise"
+      "label": "Transversal noise 1 voltage",
+      "pv": "WFGEN1C1CP:setVolt",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
+      "direction": "x/y",
+      "excitation": "transversal noise"
     },
     {
-      "label": "Horizontal excitation",
-      "pv": "TODO:H:NOISE:ENABLE",
-      "on_values": ["1", "ON", "On", "on", "Enabled"],
+      "label": "Transversal noise 1 output",
+      "pv": "WFGEN1C1CP:stOut",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
+      "direction": "x/y",
+      "excitation": "transversal noise"
+    },
+    {
+      "label": "Transversal noise 2 voltage",
+      "pv": "WFGEN2C1CP:setVolt",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
+      "direction": "x/y",
+      "excitation": "transversal noise"
+    },
+    {
+      "label": "Transversal noise 2 output",
+      "pv": "WFGEN2C1CP:stOut",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
+      "direction": "x/y",
+      "excitation": "transversal noise"
+    },
+    {
+      "label": "Phase modulation voltage",
+      "pv": "WFGENC1CP:rdVolt",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
+      "direction": "z",
+      "excitation": "phase modulation"
+    },
+    {
+      "label": "Phase modulation output",
+      "pv": "WFGENC1CP:stOut",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
+      "direction": "z",
+      "excitation": "phase modulation"
+    },
+    {
+      "label": "BBQ X drive output",
+      "pv": "BBQRP:X:DRIVEO",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
       "direction": "x",
-      "excitation": "noise/kick"
+      "excitation": "drive output candidate"
     },
     {
-      "label": "Vertical excitation",
-      "pv": "TODO:V:NOISE:ENABLE",
-      "on_values": ["1", "ON", "On", "on", "Enabled"],
+      "label": "BBQ Y drive output",
+      "pv": "BBQRP:Y:DRIVEO",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
       "direction": "y",
-      "excitation": "noise/kick"
+      "excitation": "drive output candidate"
     },
     {
-      "label": "Excitation type",
-      "pv": "TODO:EXCITATION:TYPE",
-      "on_values": ["phase", "amplitude", "chirp"],
-      "direction": "all",
-      "excitation": "type readback"
+      "label": "BBQ Z drive output",
+      "pv": "BBQRP:Z:DRIVEO",
+      "on_values": ["1", "ON", "On", "on", "Enabled", "True", "true"],
+      "direction": "z",
+      "excitation": "drive output candidate"
     }
   ],
   "bpms": [
-    {"name": "BPMZ1L2RP", "s_m": 0.0, "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "modes": ["user", "low_alpha"]},
-    {"name": "BPM_PLACEHOLDER_02", "s_m": 6.0, "dispersion_x_m": 0.18, "beta_x_m": 0.0, "beta_y_m": 0.0, "modes": ["user", "low_alpha"]},
-    {"name": "BPM_PLACEHOLDER_03", "s_m": 12.0, "dispersion_x_m": 0.32, "beta_x_m": 0.0, "beta_y_m": 0.0, "modes": ["user", "low_alpha"]},
-    {"name": "BPM_PLACEHOLDER_04", "s_m": 18.0, "dispersion_x_m": 0.05, "beta_x_m": 0.0, "beta_y_m": 0.0, "modes": ["user", "low_alpha"]}
+    {"name": "BPMZ5K1RP", "s_m": 1.2034, "section": "K1", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ5K1RP:rdX", "y_pv": "BPMZ5K1RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ6K1RP", "s_m": 2.104, "section": "K1", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ6K1RP:rdX", "y_pv": "BPMZ6K1RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ7K1RP", "s_m": 4.249, "section": "K1", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ7K1RP:rdX", "y_pv": "BPMZ7K1RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ1L2RP", "s_m": 5.229, "section": "L2", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ1L2RP:rdX", "y_pv": "BPMZ1L2RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ2L2RP", "s_m": 6.204, "section": "L2", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ2L2RP:rdX", "y_pv": "BPMZ2L2RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ3L2RP", "s_m": 8.1872, "section": "L2", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ3L2RP:rdX", "y_pv": "BPMZ3L2RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ4L2RP", "s_m": 9.0466, "section": "L2", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ4L2RP:rdX", "y_pv": "BPMZ4L2RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ5L2RP", "s_m": 14.9534, "section": "L2", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ5L2RP:rdX", "y_pv": "BPMZ5L2RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ6L2RP", "s_m": 15.854, "section": "L2", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ6L2RP:rdX", "y_pv": "BPMZ6L2RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ7L2RP", "s_m": 17.999, "section": "L2", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ7L2RP:rdX", "y_pv": "BPMZ7L2RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ1K3RP", "s_m": 18.979, "section": "K3", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ1K3RP:rdX", "y_pv": "BPMZ1K3RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ2K3RP", "s_m": 19.954, "section": "K3", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ2K3RP:rdX", "y_pv": "BPMZ2K3RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ3K3RP", "s_m": 21.9372, "section": "K3", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ3K3RP:rdX", "y_pv": "BPMZ3K3RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ4K3RP", "s_m": 22.7966, "section": "K3", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ4K3RP:rdX", "y_pv": "BPMZ4K3RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ5K3RP", "s_m": 25.2034, "section": "K3", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ5K3RP:rdX", "y_pv": "BPMZ5K3RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ6K3RP", "s_m": 26.104, "section": "K3", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ6K3RP:rdX", "y_pv": "BPMZ6K3RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ7K3RP", "s_m": 28.249, "section": "K3", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ7K3RP:rdX", "y_pv": "BPMZ7K3RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ1L4RP", "s_m": 29.229, "section": "L4", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ1L4RP:rdX", "y_pv": "BPMZ1L4RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ2L4RP", "s_m": 30.204, "section": "L4", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ2L4RP:rdX", "y_pv": "BPMZ2L4RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ3L4RP", "s_m": 32.1872, "section": "L4", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ3L4RP:rdX", "y_pv": "BPMZ3L4RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ4L4RP", "s_m": 33.0466, "section": "L4", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ4L4RP:rdX", "y_pv": "BPMZ4L4RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ5L4RP", "s_m": 38.9534, "section": "L4", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ5L4RP:rdX", "y_pv": "BPMZ5L4RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ6L4RP", "s_m": 39.854, "section": "L4", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ6L4RP:rdX", "y_pv": "BPMZ6L4RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ7L4RP", "s_m": 41.999, "section": "L4", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ7L4RP:rdX", "y_pv": "BPMZ7L4RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ1K1RP", "s_m": 42.979, "section": "K1", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ1K1RP:rdX", "y_pv": "BPMZ1K1RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ2K1RP", "s_m": 43.954, "section": "K1", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ2K1RP:rdX", "y_pv": "BPMZ2K1RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ3K1RP", "s_m": 45.9372, "section": "K1", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ3K1RP:rdX", "y_pv": "BPMZ3K1RP:rdY", "modes": ["low_emittance"]},
+    {"name": "BPMZ4K1RP", "s_m": 46.7966, "section": "K1", "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "x_pv": "BPMZ4K1RP:rdX", "y_pv": "BPMZ4K1RP:rdY", "modes": ["low_emittance"]}
   ]
 }

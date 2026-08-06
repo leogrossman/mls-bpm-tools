@@ -62,6 +62,8 @@ The main window provides:
 5. Open a simple clickable lattice view.
 6. Edit the raw BPM PV templates from the GUI if the configured names are wrong.
 7. Poll configured read-only excitation/status PVs with green/gray/red status lamps.
+8. Overlay live tune markers and harmonics from `TUNEZRP:measX`, `TUNEZRP:measY`, and `TUNEZRP:measZ` on spectrum plots.
+9. Enter multiple expressions separated by semicolons to compare several combinations at once.
 
 Every plot window updates independently and allows an expression such as:
 
@@ -71,6 +73,11 @@ A+B+C+D
 (A+B)-(C+D)
 A-B
 mean(A,B,C,D)
+sum(A,B,C,D)
+abs(A)
+real(A)
+imag(A)
+conj(A)
 ```
 
 Available plots:
@@ -79,7 +86,9 @@ Available plots:
 - raw I/Q traces for A, B, C, and D
 - magnitude versus turn
 - unwrapped phase versus turn
-- unwrapped phase plus spectrum
+- phase spectrum
+- magnitude spectrum
+- phase and magnitude spectra together
 - uncalibrated position-like ratio
 - combined four-panel overview
 
@@ -101,6 +110,8 @@ It contains:
 Use `--log-dir /path/to/logs` if the control-room copy should store logs somewhere else.
 
 Broken or missing PVs should not crash the GUI. Plot windows skip the affected BPM for that refresh, show an error count, and write the failing BPM/expression/PV context to the logs. Status PVs turn red and record the exception in `events.jsonl`.
+
+Scalar tune/status/noise PVs use the shorter `epics_scalar_timeout_s` from `bpm_config.json` (default `0.25 s`) so a bad noise-generator candidate does not stall safe-mode startup for long. Raw waveform arrays use `epics_array_timeout_s` (default `2.0 s`).
 
 ## EPICS mapping
 
@@ -124,7 +135,31 @@ The write is never silently executed. In demo and `--safe` modes it is impossibl
 
 Before live use, verify whether the actual Python EPICS client accepts the enum string `I/O Intr`. Some installations may require an enum index or another exact spelling.
 
-The status PVs in `bpm_config.json` are deliberately marked `TODO:*`. Replace them with the real phase/noise-generator enable and excitation-type readbacks from the control-room inventory. The GUI lets you edit these PV names at runtime for quick tests, but commit the verified names back to the JSON once confirmed.
+Configured tune marker PVs:
+
+```text
+TUNEZRP:measX
+TUNEZRP:measY
+TUNEZRP:measZ
+```
+
+Values between 0 and 1 are treated as tune fractions and converted to marker frequency with `f = Q f_sample`. Larger values are treated as Hz unless a config entry says `unit: "khz"`.
+
+Configured read-only noise/status candidates:
+
+```text
+WFGEN1C1CP:setVolt
+WFGEN1C1CP:stOut
+WFGEN2C1CP:setVolt
+WFGEN2C1CP:stOut
+WFGENC1CP:rdVolt
+WFGENC1CP:stOut
+BBQRP:X:DRIVEO
+BBQRP:Y:DRIVEO
+BBQRP:Z:DRIVEO
+```
+
+Some of these are confirmed from local `betagui`/CS-Studio material (`WFGEN2C1CP:*`, `WFGENC1CP:rdVolt`, `TUNEZRP:*`); the rest are editable candidates that should be confirmed on the machine.
 
 ## Physics: what one complex BPM value means
 
@@ -254,7 +289,7 @@ This should be a separate tested analysis module rather than added directly to t
 
 ## Lattice viewer integration
 
-The prototype includes a simple clickable plot of BPM position `s` and horizontal dispersion `Dx`. The values currently come from `bpm_config.json`; all entries except `BPMZ1L2RP` are explicit placeholders.
+The prototype includes a simple clickable plot of BPM position `s`. BPM names, positions, and `rdX`/`rdY` candidates come from the local `betagui` low-emittance lattice export. Beta and dispersion values remain zero until a trustworthy optics export is imported.
 
 The preferred next implementation is an export/import bridge rather than tightly coupling this viewer to another GUI:
 

@@ -17,6 +17,7 @@ python3 bpm_iq_viewer.py --safe
 - live EPICS reads are allowed
 - machine writes are blocked
 - missing/broken PVs should not crash the GUI
+- scalar tune/noise/status PVs use a short timeout so bad candidates fail fast
 - logs are written for later debugging
 
 The write-capable command exists, but do not use it until the read-only test is understood and an operator agrees:
@@ -44,7 +45,7 @@ python3 bpm_iq_viewer.py --demo
 ## Files
 
 - `bpm_iq_viewer.py`: Tkinter/Matplotlib GUI and command-line entry point.
-- `bpm_config.json`: BPM list, PV templates, sample rate, placeholder lattice data, status PVs.
+- `bpm_config.json`: BPM list, PV templates, sample rate, lattice positions, tune PVs, status PVs.
 - `requirements.txt`: Python dependencies.
 - `test_bpm_iq_viewer.py`: offline unit tests.
 - `README_BPM_IQ_VIEWER.md`: older detailed prototype notes; this `README.md` is the current entry point.
@@ -64,6 +65,8 @@ Runtime packages:
 - `matplotlib`
 - `pyepics`
 - `tkinter`
+
+The default config uses a 2.0 s timeout for raw waveform reads and a 0.25 s timeout for scalar tune/status/noise readbacks. This is meant to keep bad noise-generator PV candidates from stalling `--safe` startup.
 
 ## Logs
 
@@ -138,18 +141,50 @@ Before any write-capable run, verify:
 
 The GUI has editable PV template fields, so if the capitalization or namespace is wrong you can test another template at runtime. Commit confirmed names back to `bpm_config.json`.
 
-## Status PVs
-
-`bpm_config.json` currently contains placeholder status PVs:
+The BPM list and positions were copied from the local `betagui` low-emittance lattice export. Each BPM entry includes orbit readback candidates:
 
 ```text
-TODO:PHASE:NOISE:ENABLE
-TODO:H:NOISE:ENABLE
-TODO:V:NOISE:ENABLE
-TODO:EXCITATION:TYPE
+{bpm}:rdX
+{bpm}:rdY
 ```
 
-These are intentionally not guessed. Replace them with real readback PVs from the control-room inventory for:
+The raw I/Q PV namespace is still template-based and must be verified on the control-room machine.
+
+## Status PVs
+
+`bpm_config.json` currently contains these read-only tune PVs for spectrum markers:
+
+```text
+TUNEZRP:measX
+TUNEZRP:measY
+TUNEZRP:measZ
+```
+
+The code treats values between 0 and 1 as tune fractions, converting to frequency with:
+
+```text
+f_marker = Q * f_sample
+```
+
+Larger values are treated as Hz unless the config says `unit: "khz"`.
+
+The status/noise candidates are:
+
+```text
+WFGEN1C1CP:setVolt
+WFGEN1C1CP:stOut
+WFGEN2C1CP:setVolt
+WFGEN2C1CP:stOut
+WFGENC1CP:rdVolt
+WFGENC1CP:stOut
+BBQRP:X:DRIVEO
+BBQRP:Y:DRIVEO
+BBQRP:Z:DRIVEO
+```
+
+`WFGEN2C1CP:setVolt`, `WFGEN2C1CP:stOut`, `WFGENC1CP:rdVolt`, and the `TUNEZRP:*` tune PVs appear in the local `betagui`/CS-Studio material. `WFGEN1C1CP:*`, `WFGENC1CP:stOut`, and `BBQRP:*:DRIVEO` are editable candidates based on the requested control-room names and should be confirmed live.
+
+Use these rows for read-only indication of:
 
 - longitudinal phase/noise generator enable
 - horizontal excitation enable
@@ -166,9 +201,12 @@ For now these are read-only. Later, write controls can be added behind explicit 
 4. First inspect individual buttons with expressions `A`, `B`, `C`, `D`.
 5. Use `raw buttons` plot mode to compare all I/Q traces.
 6. Use `A+B+C+D` for common mode.
-7. Try difference expressions only as uncalibrated diagnostics until button geometry is confirmed.
-8. Open the lattice view to select BPMs by position/dispersion placeholder data.
-9. Check logs after any red PV status or plot error.
+7. Try `spectra` to see phase and magnitude spectra together.
+8. Toggle `Tunes` and `Harmonics` in plot windows to overlay live tune marker lines.
+9. Enter multiple expressions separated by semicolons, for example `A+B+C+D; A-B; (A+B)-(C+D)`.
+10. Try difference expressions only as uncalibrated diagnostics until button geometry is confirmed.
+11. Open the lattice view to select BPMs by ring position and candidate `rdX`/`rdY` PV names.
+12. Check logs after any red PV status or plot error.
 
 Useful expressions:
 
@@ -182,6 +220,11 @@ A+B+C+D
 (A+D)-(B+C)
 A-B
 mean(A,B,C,D)
+sum(A,B,C,D)
+abs(A)
+real(A)
+imag(A)
+conj(A)
 ```
 
 Available plot modes:
@@ -190,9 +233,13 @@ Available plot modes:
 - `raw buttons`: raw I and Q arrays for A, B, C, D.
 - `magnitude`: `abs(expression)` versus turn.
 - `phase`: `unwrap(angle(expression))` versus turn.
-- `phase+spectrum`: unwrapped phase plus FFT power spectrum.
+- `phase spectrum`: FFT power spectrum of unwrapped phase.
+- `magnitude spectrum`: magnitude versus turn plus FFT power spectrum of magnitude.
+- `spectra`: phase and magnitude spectra together.
 - `position-like`: `Re(expression / (A+B+C+D))`, uncalibrated.
 - `all`: compact overview of I, Q, phase, and phase spectrum.
+
+Spectrum modes can overlay tune markers and harmonics. Markers are based on live read-only tune PVs. If a tune PV is broken or out of range, the marker is skipped and the error is logged.
 
 ## Theory
 
@@ -346,7 +393,7 @@ This can separate betatron and dispersive components if:
 
 ## Lattice Viewer Idea
 
-The current lattice view uses placeholder `s` and `D_x` data in `bpm_config.json`.
+The current lattice view uses the BPM positions and `rdX`/`rdY` PV candidates imported from the low-emittance lattice export. It does not yet contain trustworthy beta or dispersion functions; those fields are zero until imported.
 
 The intended import format is:
 
@@ -403,6 +450,7 @@ The tests cover:
 - Status PV names are placeholders.
 - BPM inventory is incomplete.
 - Lattice functions are placeholders.
+- Tune marker conversion assumes tune-fraction values for `TUNEZRP:*` when values are between 0 and 1.
 - Button geometry is not confirmed.
 - Channel calibration is not implemented.
 - DDC frequency is unknown, so phase-to-time conversion is not shown in the GUI.

@@ -92,9 +92,12 @@ DEFAULT_LOG_ROOT = Path(".mls_bpm_local") / "logs"
 class BPMInfo:
     name: str
     s_m: float = 0.0
+    section: str = ""
     dispersion_x_m: float = 0.0
     beta_x_m: float = math.nan
     beta_y_m: float = math.nan
+    x_pv: str = ""
+    y_pv: str = ""
     modes: List[str] = field(default_factory=lambda: ["user", "low_alpha"])
 
 
@@ -105,6 +108,15 @@ class StatusPV:
     on_values: List[str] = field(default_factory=lambda: ["1", "ON", "On", "on"])
     direction: str = ""
     excitation: str = ""
+
+
+@dataclass
+class TunePV:
+    label: str
+    pv: str
+    color: str
+    unit: str = "auto"
+    harmonics: int = 4
 
 
 class SessionLogger:
@@ -130,9 +142,12 @@ class AppConfig:
     bpms: List[BPMInfo]
     pv_templates: Dict[str, str]
     status_pvs: List[StatusPV] = field(default_factory=list)
+    tune_pvs: List[TunePV] = field(default_factory=list)
     sample_rate_hz: float = DEFAULT_SAMPLE_RATE
     ddc_frequency_hz: Optional[float] = None
     refresh_ms: int = 1000
+    epics_array_timeout_s: float = 2.0
+    epics_scalar_timeout_s: float = 0.25
 
     @classmethod
     def load(cls, path: Path) -> "AppConfig":
@@ -142,9 +157,12 @@ class AppConfig:
             bpms=bpms,
             pv_templates=raw["pv_templates"],
             status_pvs=[StatusPV(**item) for item in raw.get("status_pvs", [])],
+            tune_pvs=[TunePV(**item) for item in raw.get("tune_pvs", [])],
             sample_rate_hz=float(raw.get("sample_rate_hz", DEFAULT_SAMPLE_RATE)),
             ddc_frequency_hz=raw.get("ddc_frequency_hz"),
             refresh_ms=int(raw.get("refresh_ms", 1000)),
+            epics_array_timeout_s=float(raw.get("epics_array_timeout_s", 2.0)),
+            epics_scalar_timeout_s=float(raw.get("epics_scalar_timeout_s", 0.25)),
         )
 
 
@@ -160,13 +178,14 @@ class Backend:
 
 
 class EpicsBackend(Backend):
-    def __init__(self, timeout: float = 2.0):
+    def __init__(self, array_timeout: float = 2.0, scalar_timeout: float = 0.25):
         if epics is None:
             raise RuntimeError("pyepics is not installed")
-        self.timeout = timeout
+        self.array_timeout = array_timeout
+        self.scalar_timeout = scalar_timeout
 
     def get_array(self, pv: str) -> np.ndarray:
-        value = epics.caget(pv, timeout=self.timeout)
+        value = epics.caget(pv, timeout=self.array_timeout)
         if value is None:
             raise RuntimeError(f"No value returned from {pv}")
         arr = np.asarray(value, dtype=float).ravel()
@@ -175,13 +194,13 @@ class EpicsBackend(Backend):
         return arr
 
     def get_value(self, pv: str) -> object:
-        value = epics.caget(pv, timeout=self.timeout)
+        value = epics.caget(pv, timeout=self.scalar_timeout)
         if value is None:
             raise RuntimeError(f"No value returned from {pv}")
         return value
 
     def put(self, pv: str, value: object) -> None:
-        ok = epics.caput(pv, value, wait=True, timeout=self.timeout)
+        ok = epics.caput(pv, value, wait=True, timeout=self.array_timeout)
         if ok is None or ok == 0:
             raise RuntimeError(f"Write failed: {pv} <- {value!r}")
 
@@ -208,6 +227,12 @@ class DemoBackend(Backend):
 
     def get_value(self, pv: str) -> object:
         seed = abs(hash(pv)) % 11
+        if "TUNEZRP:MEASX" in pv.upper():
+            return 0.1779
+        if "TUNEZRP:MEASY" in pv.upper():
+            return 0.22
+        if "TUNEZRP:MEASZ" in pv.upper():
+            return 0.0065
         if "TYPE" in pv.upper():
             return ("off", "phase", "amplitude", "chirp")[seed % 4]
         return int(seed % 3 == 0)
@@ -248,9 +273,14 @@ def combination_expression(data: Mapping[str, np.ndarray], expr: str) -> np.ndar
     expr = re.sub(r"\b([abcd])\b", lambda match: match.group(1).upper(), expr.strip())
     env = {k: np.asarray(v) for k, v in data.items()}
     env["mean"] = lambda *args: np.mean(np.vstack(args), axis=0)
-    allowed = set("ABCDmean()+-*/, .")
+    env["sum"] = lambda *args: np.sum(np.vstack(args), axis=0)
+    env["conj"] = np.conjugate
+    env["real"] = np.real
+    env["imag"] = np.imag
+    env["abs"] = np.abs
+    allowed = set("ABCDmeanumsconjrealigab()+-*/, .")
     if any(ch not in allowed for ch in expr):
-        raise ValueError("Expression supports only A/B/C/D, mean(), +, -, *, / and parentheses")
+        raise ValueError("Expression supports A/B/C/D, mean(), sum(), abs(), real(), imag(), conj(), +, -, *, / and parentheses")
     try:
         value = eval(expr, {"__builtins__": {}}, env)  # noqa: S307 - restricted grammar/env
     except Exception as exc:
@@ -274,6 +304,51 @@ def spectrum(x: np.ndarray, fs: float) -> Tuple[np.ndarray, np.ndarray]:
     return freq, psd
 
 
+def parse_expressions(text: str) -> List[str]:
+    expressions = [item.strip() for item in re.split(r"[;\n]", text) if item.strip()]
+    return expressions or ["A+B+C+D"]
+
+
+def tune_value_to_frequency(value: object, fs: float, unit: str = "auto") -> Optional[Tuple[float, float]]:
+    try:
+        numeric = float(np.asarray(value).ravel()[0])
+    except Exception:
+        return None
+    if not np.isfinite(numeric) or numeric <= 0:
+        return None
+    unit = unit.lower()
+    if unit == "tune" or (unit == "auto" and numeric <= 1.0):
+        tune = numeric
+        freq = numeric * fs
+    elif unit == "khz":
+        freq = numeric * 1000.0
+        tune = freq / fs
+    else:
+        freq = numeric
+        tune = freq / fs
+    if freq <= 0 or freq > fs / 2:
+        return None
+    return freq, tune
+
+
+def tune_markers_from_values(tunes: Mapping[str, Mapping[str, object]], fs: float, include_harmonics: bool) -> List[Tuple[float, str, str]]:
+    markers: List[Tuple[float, str, str]] = []
+    for label, info in tunes.items():
+        converted = tune_value_to_frequency(info.get("value"), fs, str(info.get("unit", "auto")))
+        if converted is None:
+            continue
+        base_freq, tune = converted
+        color = str(info.get("color", "0.35"))
+        harmonics = int(info.get("harmonics", 1)) if include_harmonics else 1
+        for harmonic in range(1, max(harmonics, 1) + 1):
+            freq = base_freq * harmonic
+            if freq > fs / 2:
+                break
+            marker_label = f"{label} Q={tune:.4g}" if harmonic == 1 else f"{harmonic}{label}"
+            markers.append((freq, marker_label, color))
+    return markers
+
+
 class PlotWindow(tk.Toplevel):
     def __init__(self, app: "BPMViewer", bpm_names: Sequence[str], expression: str = "A+B+C+D"):
         super().__init__(app.root)
@@ -288,18 +363,22 @@ class PlotWindow(tk.Toplevel):
         controls.pack(side=tk.TOP, fill=tk.X, padx=6, pady=4)
         ttk.Label(controls, text="Combination:").pack(side=tk.LEFT)
         self.expr = tk.StringVar(value=expression)
-        ttk.Entry(controls, textvariable=self.expr, width=24).pack(side=tk.LEFT, padx=4)
+        ttk.Entry(controls, textvariable=self.expr, width=34).pack(side=tk.LEFT, padx=4)
         ttk.Label(controls, text="Plot:").pack(side=tk.LEFT, padx=(12, 2))
-        self.plot_kind = tk.StringVar(value="phase+spectrum")
+        self.plot_kind = tk.StringVar(value="spectra")
         ttk.Combobox(
             controls,
             textvariable=self.plot_kind,
-            values=("I/Q", "raw buttons", "magnitude", "phase", "phase+spectrum", "position-like", "all"),
+            values=("I/Q", "raw buttons", "magnitude", "phase", "phase spectrum", "magnitude spectrum", "spectra", "position-like", "all"),
             state="readonly",
             width=16,
         ).pack(side=tk.LEFT)
         self.live = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Live", variable=self.live).pack(side=tk.LEFT, padx=10)
+        self.show_tunes = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls, text="Tunes", variable=self.show_tunes).pack(side=tk.LEFT)
+        self.show_harmonics = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls, text="Harmonics", variable=self.show_harmonics).pack(side=tk.LEFT)
         ttk.Button(controls, text="Refresh now", command=self.refresh).pack(side=tk.LEFT)
         ttk.Button(controls, text="Pause", command=self.toggle_pause).pack(side=tk.LEFT, padx=4)
         ttk.Button(controls, text="Save data", command=self.save_data).pack(side=tk.LEFT, padx=4)
@@ -362,21 +441,26 @@ class PlotWindow(tk.Toplevel):
         self.figure.clear()
         if kind == "all":
             axes = [self.figure.add_subplot(221), self.figure.add_subplot(222), self.figure.add_subplot(223), self.figure.add_subplot(224)]
-        elif kind == "phase+spectrum":
+        elif kind == "spectra":
+            axes = [self.figure.add_subplot(211), self.figure.add_subplot(212)]
+        elif kind == "phase spectrum":
+            axes = [self.figure.add_subplot(111)]
+        elif kind == "magnitude spectrum":
             axes = [self.figure.add_subplot(211), self.figure.add_subplot(212)]
         else:
             axes = [self.figure.add_subplot(111)]
 
         expr_text = self.expr.get().strip()
-        buttons_needed = normalize_button_tokens(expr_text)
+        expressions = parse_expressions(expr_text)
+        buttons_needed = sorted(set(button for expr in expressions for button in normalize_button_tokens(expr)))
         if kind in ("position-like", "raw buttons"):
             buttons_needed = list(BUTTONS)
         self.last_data = {}
         self.last_errors = {}
+        tune_markers = self.app.current_tune_markers(include_harmonics=self.show_harmonics.get()) if self.show_tunes.get() else []
         for bpm in self.bpm_names:
             try:
                 phasors = read_button_phasors(self.app.backend, self.app.cfg, bpm, buttons_needed)
-                z = combination_expression(phasors, expr_text)
             except Exception as exc:
                 message = str(exc)
                 self.last_errors[bpm] = message
@@ -389,51 +473,80 @@ class PlotWindow(tk.Toplevel):
                     error=message,
                 )
                 continue
-            phase = np.unwrap(np.angle(z))
-            mag = np.abs(z)
-            self.last_data[bpm] = {**phasors, "combined": z, "phase": phase, "magnitude": mag}
-            turns = np.arange(z.size)
+            self.last_data[bpm] = dict(phasors)
+            for expr in expressions:
+                try:
+                    z = combination_expression(phasors, expr)
+                except Exception as exc:
+                    message = str(exc)
+                    self.last_errors[f"{bpm} {expr}"] = message
+                    self.app.session.event("expression_error", bpm=bpm, expression=expr, error=message)
+                    continue
+                phase = np.unwrap(np.angle(z))
+                mag = np.abs(z)
+                label = bpm if len(expressions) == 1 else f"{bpm} {expr}"
+                self.last_data[bpm][f"combined_{expr}"] = z
+                self.last_data[bpm][f"phase_{expr}"] = phase
+                self.last_data[bpm][f"magnitude_{expr}"] = mag
+                turns = np.arange(z.size)
 
-            if kind == "I/Q":
-                axes[0].plot(z.real, z.imag, ".-", ms=2, label=bpm)
-                axes[0].set_xlabel("I")
-                axes[0].set_ylabel("Q")
-            elif kind == "raw buttons":
-                for button in BUTTONS:
-                    raw = phasors[button]
-                    axes[0].plot(turns, raw.real, label=f"{bpm} {button} I", alpha=0.75)
-                    axes[0].plot(turns, raw.imag, label=f"{bpm} {button} Q", alpha=0.75, linestyle="--")
-                axes[0].set_ylabel("raw I/Q [arb.]")
-            elif kind == "magnitude":
-                axes[0].plot(turns, mag, label=bpm)
-                axes[0].set_ylabel("|phasor|")
-            elif kind == "phase":
-                axes[0].plot(turns, phase, label=bpm)
-                axes[0].set_ylabel("unwrapped phase [rad]")
-            elif kind == "position-like":
-                denom = phasors.get("A", 0) + phasors.get("B", 0) + phasors.get("C", 0) + phasors.get("D", 0)
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    value = np.real(z / denom) if np.ndim(denom) else np.real(z)
-                axes[0].plot(turns, value, label=bpm)
-                axes[0].set_ylabel("Re(combination / sum), uncalibrated")
-            elif kind == "phase+spectrum":
-                axes[0].plot(turns, phase, label=bpm)
-                f, p = spectrum(phase, self.app.cfg.sample_rate_hz)
-                axes[1].semilogy(f, np.maximum(p, 1e-30), label=bpm)
-                axes[0].set_ylabel("unwrapped phase [rad]")
-                axes[1].set_xlabel("frequency [Hz]")
-                axes[1].set_ylabel("phase PSD [arb.]")
-                axes[1].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
-            else:  # all
-                axes[0].plot(turns, z.real, label=bpm)
-                axes[1].plot(turns, z.imag, label=bpm)
-                axes[2].plot(turns, phase, label=bpm)
-                f, p = spectrum(phase, self.app.cfg.sample_rate_hz)
-                axes[3].semilogy(f, np.maximum(p, 1e-30), label=bpm)
-                axes[0].set_title("I")
-                axes[1].set_title("Q")
-                axes[2].set_title("phase")
-                axes[3].set_title("phase spectrum")
+                if kind == "I/Q":
+                    axes[0].plot(z.real, z.imag, ".-", ms=2, label=label)
+                    axes[0].set_xlabel("I")
+                    axes[0].set_ylabel("Q")
+                elif kind == "raw buttons":
+                    for button in BUTTONS:
+                        raw = phasors[button]
+                        axes[0].plot(turns, raw.real, label=f"{bpm} {button} I", alpha=0.75)
+                        axes[0].plot(turns, raw.imag, label=f"{bpm} {button} Q", alpha=0.75, linestyle="--")
+                    axes[0].set_ylabel("raw I/Q [arb.]")
+                    break
+                elif kind == "magnitude":
+                    axes[0].plot(turns, mag, label=label)
+                    axes[0].set_ylabel("|phasor|")
+                elif kind == "phase":
+                    axes[0].plot(turns, phase, label=label)
+                    axes[0].set_ylabel("unwrapped phase [rad]")
+                elif kind == "position-like":
+                    denom = phasors.get("A", 0) + phasors.get("B", 0) + phasors.get("C", 0) + phasors.get("D", 0)
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        value = np.real(z / denom) if np.ndim(denom) else np.real(z)
+                    axes[0].plot(turns, value, label=label)
+                    axes[0].set_ylabel("Re(combination / sum), uncalibrated")
+                elif kind == "phase spectrum":
+                    f, p = spectrum(phase, self.app.cfg.sample_rate_hz)
+                    axes[0].semilogy(f, np.maximum(p, 1e-30), label=label)
+                    axes[0].set_xlabel("frequency [Hz]")
+                    axes[0].set_ylabel("phase PSD [arb.]")
+                    axes[0].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
+                elif kind == "magnitude spectrum":
+                    axes[0].plot(turns, mag, label=label)
+                    f, p = spectrum(mag, self.app.cfg.sample_rate_hz)
+                    axes[1].semilogy(f, np.maximum(p, 1e-30), label=label)
+                    axes[0].set_ylabel("|phasor|")
+                    axes[1].set_xlabel("frequency [Hz]")
+                    axes[1].set_ylabel("magnitude PSD [arb.]")
+                    axes[1].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
+                elif kind == "spectra":
+                    f_phase, p_phase = spectrum(phase, self.app.cfg.sample_rate_hz)
+                    f_mag, p_mag = spectrum(mag, self.app.cfg.sample_rate_hz)
+                    axes[0].semilogy(f_phase, np.maximum(p_phase, 1e-30), label=label)
+                    axes[1].semilogy(f_mag, np.maximum(p_mag, 1e-30), label=label)
+                    axes[0].set_ylabel("phase PSD [arb.]")
+                    axes[1].set_ylabel("magnitude PSD [arb.]")
+                    axes[1].set_xlabel("frequency [Hz]")
+                    axes[0].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
+                    axes[1].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
+                else:  # all
+                    axes[0].plot(turns, z.real, label=label)
+                    axes[1].plot(turns, z.imag, label=label)
+                    axes[2].plot(turns, phase, label=label)
+                    f, p = spectrum(phase, self.app.cfg.sample_rate_hz)
+                    axes[3].semilogy(f, np.maximum(p, 1e-30), label=label)
+                    axes[0].set_title("I")
+                    axes[1].set_title("Q")
+                    axes[2].set_title("phase")
+                    axes[3].set_title("phase spectrum")
 
         if not self.last_data:
             axes[0].text(
@@ -455,8 +568,16 @@ class PlotWindow(tk.Toplevel):
                 fontsize=9,
             )
 
-        for ax in axes:
+        for index, ax in enumerate(axes):
             ax.grid(True, alpha=0.3)
+            is_spectrum_axis = (
+                kind == "phase spectrum"
+                or (kind == "magnitude spectrum" and index == 1)
+                or kind == "spectra"
+                or (kind == "all" and index == len(axes) - 1)
+            )
+            if tune_markers and is_spectrum_axis:
+                self._draw_tune_markers(ax, tune_markers)
             handles, _labels = ax.get_legend_handles_labels()
             if handles:
                 ax.legend(loc="best")
@@ -464,6 +585,13 @@ class PlotWindow(tk.Toplevel):
         self.canvas.draw_idle()
         suffix = f"; {len(self.last_errors)} error(s)" if self.last_errors else ""
         self.status.set(f"Updated {time.strftime('%H:%M:%S')} - expression {self.expr.get()}{suffix}")
+
+    def _draw_tune_markers(self, ax, markers: Sequence[Tuple[float, str, str]]) -> None:
+        ymin, ymax = ax.get_ylim()
+        for freq, label, color in markers:
+            ax.axvline(freq, color=color, alpha=0.45, linestyle="--", linewidth=1.0)
+            ax.text(freq, ymax, label, rotation=90, va="top", ha="right", color=color, fontsize=8)
+        ax.set_ylim(ymin, ymax)
 
 
 class LatticeWindow(tk.Toplevel):
@@ -475,9 +603,12 @@ class LatticeWindow(tk.Toplevel):
         top = ttk.Frame(self)
         top.pack(fill=tk.X, padx=6, pady=4)
         ttk.Label(top, text="Optics mode:").pack(side=tk.LEFT)
-        self.mode = tk.StringVar(value="user")
-        ttk.Combobox(top, textvariable=self.mode, values=("user", "low_alpha"), state="readonly", width=14).pack(side=tk.LEFT, padx=4)
-        ttk.Label(top, text="Prototype: positions/functions come from bpm_config.json; replace with exported lattice data.").pack(side=tk.LEFT, padx=12)
+        modes = sorted({mode for bpm in app.cfg.bpms for mode in bpm.modes}) or ["low_emittance"]
+        self.mode = tk.StringVar(value=modes[0])
+        ttk.Combobox(top, textvariable=self.mode, values=modes, state="readonly", width=14).pack(side=tk.LEFT, padx=4)
+        self.show_labels = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top, text="Labels", variable=self.show_labels, command=self.draw).pack(side=tk.LEFT, padx=4)
+        ttk.Label(top, text="Click a BPM marker to select/open raw I/Q. Positions/PVs come from bpm_config.json.").pack(side=tk.LEFT, padx=12)
 
         self.fig = Figure(figsize=(10, 4), dpi=100)
         self.ax = self.fig.add_subplot(111)
@@ -491,13 +622,30 @@ class LatticeWindow(tk.Toplevel):
         bpms = sorted(self.app.cfg.bpms, key=lambda b: b.s_m)
         s = np.array([b.s_m for b in bpms])
         d = np.array([b.dispersion_x_m for b in bpms])
-        self.ax.plot(s, d, "-", alpha=0.5, label="Dx [m]")
-        points = self.ax.scatter(s, d, picker=True, pickradius=8, label="BPM")
+        bx = np.array([b.beta_x_m for b in bpms], dtype=float)
+        by = np.array([b.beta_y_m for b in bpms], dtype=float)
+        has_dispersion = np.any(np.isfinite(d) & (np.abs(d) > 0))
+        has_beta_x = np.any(np.isfinite(bx) & (np.abs(bx) > 0))
+        has_beta_y = np.any(np.isfinite(by) & (np.abs(by) > 0))
+        marker_y = d if has_dispersion else np.zeros_like(s)
+        if has_dispersion:
+            self.ax.plot(s, d, "-", alpha=0.6, label="Dx [m]")
+        if has_beta_x:
+            self.ax.plot(s, bx, "-", alpha=0.45, label="beta_x [m]")
+        if has_beta_y:
+            self.ax.plot(s, by, "-", alpha=0.45, label="beta_y [m]")
+        points = self.ax.scatter(s, marker_y, picker=True, pickradius=8, label="BPM")
         points._bpm_names = [b.name for b in bpms]  # type: ignore[attr-defined]
-        for bpm in bpms:
-            self.ax.annotate(bpm.name, (bpm.s_m, bpm.dispersion_x_m), fontsize=7, rotation=45)
+        points._bpm_pvs = [(b.x_pv, b.y_pv) for b in bpms]  # type: ignore[attr-defined]
+        if self.show_labels.get():
+            for bpm, y in zip(bpms, marker_y):
+                label = f"{bpm.name}\nX:{bpm.x_pv}\nY:{bpm.y_pv}" if bpm.x_pv or bpm.y_pv else bpm.name
+                self.ax.annotate(label, (bpm.s_m, y), fontsize=6, rotation=45)
         self.ax.set_xlabel("s [m]")
-        self.ax.set_ylabel("horizontal dispersion [m]")
+        self.ax.set_ylabel("lattice function [m]" if has_dispersion or has_beta_x or has_beta_y else "BPM markers")
+        if not (has_dispersion or has_beta_x or has_beta_y):
+            self.ax.set_ylim(-1.0, 1.0)
+            self.ax.text(0.02, 0.95, "Only BPM positions/PVs are configured; import optics later for beta/Dx.", transform=self.ax.transAxes, va="top")
         self.ax.grid(True, alpha=0.3)
         self.ax.legend()
         self.fig.tight_layout()
@@ -510,6 +658,9 @@ class LatticeWindow(tk.Toplevel):
             return
         bpm = names[event.ind[0]]
         self.app.select_bpm(bpm)
+        pvs = getattr(artist, "_bpm_pvs", [("", "")])
+        x_pv, y_pv = pvs[event.ind[0]]
+        self.app.session.event("lattice_bpm_selected", bpm=bpm, x_pv=x_pv, y_pv=y_pv)
         PlotWindow(self.app, [bpm])
 
 
@@ -534,6 +685,8 @@ class BPMViewer:
         self.selected: List[str] = []
         self.status_after_id: Optional[str] = None
         self._last_status_values: Dict[str, str] = {}
+        self._tune_values: Dict[str, Dict[str, object]] = {}
+        self._last_tune_values: Dict[str, str] = {}
 
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
@@ -572,13 +725,18 @@ class BPMViewer:
         ttk.Button(pv_box, text="Apply templates", command=self.apply_pv_templates).grid(row=0, column=2, rowspan=3, sticky="ns")
         pv_box.columnconfigure(1, weight=1)
 
+        self.tune_frame = ttk.LabelFrame(main, text="Read-only tune PVs for spectrum markers", padding=8)
+        self.tune_frame.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.tune_rows: List[Tuple[TunePV, tk.StringVar, tk.Label]] = []
+        self.build_tune_rows()
+
         self.status_pv_frame = ttk.LabelFrame(main, text="Read-only excitation / status PVs", padding=8)
-        self.status_pv_frame.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.status_pv_frame.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.status_pv_rows: List[Tuple[StatusPV, tk.StringVar, tk.Label]] = []
         self.build_status_pv_rows()
 
         info = ttk.LabelFrame(main, text="Combination examples", padding=8)
-        info.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        info.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         ttk.Label(
             info,
             justify=tk.LEFT,
@@ -592,10 +750,11 @@ class BPMViewer:
         ).pack(anchor="w")
 
         self.status = tk.StringVar(value=mode_label)
-        ttk.Label(main, textvariable=self.status).grid(row=13, column=0, columnspan=2, sticky="w", pady=8)
+        ttk.Label(main, textvariable=self.status).grid(row=14, column=0, columnspan=2, sticky="w", pady=8)
 
         main.rowconfigure(2, weight=1)
         main.columnconfigure(0, weight=1)
+        self.refresh_tunes()
         self.refresh_status_pvs()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -666,7 +825,66 @@ class BPMViewer:
             self.status_pv_rows.append((item, value_var, lamp))
         self.status_pv_frame.columnconfigure(2, weight=1)
 
+    def build_tune_rows(self) -> None:
+        for child in self.tune_frame.winfo_children():
+            child.destroy()
+        self.tune_rows = []
+        if not self.cfg.tune_pvs:
+            ttk.Label(self.tune_frame, text="No tune PVs configured.").grid(row=0, column=0, sticky="w")
+            return
+        headers = ("Status", "Label", "PV", "Unit", "Value")
+        for col, text in enumerate(headers):
+            ttk.Label(self.tune_frame, text=text).grid(row=0, column=col, sticky="w", padx=3)
+        for row, item in enumerate(self.cfg.tune_pvs, start=1):
+            lamp = tk.Label(self.tune_frame, text="?", width=3, relief=tk.GROOVE, bg="#d9d9d9")
+            lamp.grid(row=row, column=0, sticky="w", padx=3, pady=1)
+            value_var = tk.StringVar(value="not read")
+            pv_var = tk.StringVar(value=item.pv)
+            ttk.Label(self.tune_frame, text=item.label).grid(row=row, column=1, sticky="w", padx=3)
+            entry = ttk.Entry(self.tune_frame, textvariable=pv_var, width=34)
+            entry.grid(row=row, column=2, sticky="ew", padx=3)
+            entry.bind("<FocusOut>", lambda _e, cfg=item, var=pv_var: setattr(cfg, "pv", var.get().strip()))
+            ttk.Label(self.tune_frame, text=item.unit).grid(row=row, column=3, sticky="w", padx=3)
+            ttk.Label(self.tune_frame, textvariable=value_var).grid(row=row, column=4, sticky="w", padx=3)
+            self.tune_rows.append((item, value_var, lamp))
+        self.tune_frame.columnconfigure(2, weight=1)
+
+    def refresh_tunes(self) -> None:
+        for item, value_var, lamp in self.tune_rows:
+            try:
+                value = self.backend.get_value(item.pv)
+                converted = tune_value_to_frequency(value, self.cfg.sample_rate_hz, item.unit)
+                if converted is None:
+                    raise RuntimeError(f"Cannot convert tune value {value!r}")
+                freq, tune = converted
+                text = f"{value} -> {freq:.3g} Hz, Q={tune:.5g}"
+                value_var.set(text)
+                lamp.configure(text="OK", bg=item.color)
+                self._tune_values[item.label] = {
+                    "value": value,
+                    "unit": item.unit,
+                    "color": item.color,
+                    "harmonics": item.harmonics,
+                }
+                if self._last_tune_values.get(item.pv) != text:
+                    self.session.event("tune_pv_read", label=item.label, pv=item.pv, value=str(value), frequency_hz=freq, tune=tune)
+                    self._last_tune_values[item.pv] = text
+            except Exception as exc:
+                message = str(exc)
+                value_var.set(message)
+                lamp.configure(text="ERR", bg="#d65f5f")
+                self._tune_values.pop(item.label, None)
+                error_marker = f"ERROR:{message}"
+                if self._last_tune_values.get(item.pv) != error_marker:
+                    self.session.event("tune_pv_error", label=item.label, pv=item.pv, error=message)
+                    self._last_tune_values[item.pv] = error_marker
+
+    def current_tune_markers(self, include_harmonics: bool) -> List[Tuple[float, str, str]]:
+        self.refresh_tunes()
+        return tune_markers_from_values(self._tune_values, self.cfg.sample_rate_hz, include_harmonics)
+
     def refresh_status_pvs(self) -> None:
+        self.refresh_tunes()
         for item, value_var, lamp in self.status_pv_rows:
             try:
                 value = self.backend.get_value(item.pv)
@@ -797,7 +1015,11 @@ def main() -> int:
         raise SystemExit("--allow-writes requires --live and cannot be combined with --safe or --demo")
     use_live = args.live or args.safe
     use_demo = args.demo or not use_live
-    backend: Backend = EpicsBackend() if use_live else DemoBackend(fs=cfg.sample_rate_hz)
+    backend: Backend = (
+        EpicsBackend(array_timeout=cfg.epics_array_timeout_s, scalar_timeout=cfg.epics_scalar_timeout_s)
+        if use_live
+        else DemoBackend(fs=cfg.sample_rate_hz)
+    )
     can_write_machine = bool(args.allow_writes and use_live)
     if use_demo:
         mode_label = "DEMO: synthetic data, no machine access"
