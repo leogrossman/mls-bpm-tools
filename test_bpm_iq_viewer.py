@@ -13,6 +13,7 @@ from bpm_iq_viewer import (
     build_arg_parser,
     combine_selected_expressions,
     combination_expression,
+    nearest_bpm_marker,
     normalize_button_tokens,
     phase_pipeline,
     pv_for,
@@ -59,6 +60,12 @@ class BPMIQViewerTest(unittest.TestCase):
             combine_selected_expressions(["A", "A+B+C+D", "A"], "B; C", True),
             "A; A+B+C+D; B; C",
         )
+
+    def test_nearest_bpm_marker_requires_close_click(self):
+        markers = {"BPMZ1L2RP": (10.0, 20.0), "BPMZ3L2RP": (40.0, 20.0)}
+
+        self.assertEqual(nearest_bpm_marker(13.0, 21.0, markers, max_distance=8.0), "BPMZ1L2RP")
+        self.assertIsNone(nearest_bpm_marker(25.0, 60.0, markers, max_distance=8.0))
 
     def test_default_runtime_is_live_safe_not_demo(self):
         parser = build_arg_parser()

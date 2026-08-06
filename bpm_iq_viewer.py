@@ -495,6 +495,22 @@ def tune_markers_from_values(tunes: Mapping[str, Mapping[str, object]], fs: floa
     return markers
 
 
+def nearest_bpm_marker(
+    x: float,
+    y: float,
+    marker_positions: Mapping[str, Tuple[float, float]],
+    max_distance: float = 12.0,
+) -> Optional[str]:
+    best_name: Optional[str] = None
+    best_distance = max_distance
+    for name, (mx, my) in marker_positions.items():
+        distance = math.hypot(float(x) - mx, float(y) - my)
+        if distance <= best_distance:
+            best_name = name
+            best_distance = distance
+    return best_name
+
+
 class PlotWindow(tk.Toplevel):
     def __init__(
         self,
@@ -628,7 +644,8 @@ class PlotWindow(tk.Toplevel):
             self.add_bpm(bpm, refresh=False)
         self.rebuild_bpm_rows()
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.refresh()
+        self.status.set("Viewer ready. Click Refresh now, or leave Live on for the first scheduled read.")
+        self.after_id = self.after(100, self.refresh)
 
     def update_title(self) -> None:
         names = self.active_bpm_names()
@@ -1050,7 +1067,7 @@ class LatticeWindow(tk.Toplevel):
         pvs = getattr(artist, "_bpm_pvs", [("", "")])
         x_pv, y_pv = pvs[event.ind[0]]
         self.app.session.event("lattice_bpm_selected", bpm=bpm, x_pv=x_pv, y_pv=y_pv)
-        PlotWindow(self.app, [bpm])
+        self.app.root.after(1, lambda bpm=bpm: PlotWindow(self.app, [bpm]))
 
 
 class PVProbeWindow(tk.Toplevel):
@@ -1192,7 +1209,7 @@ class BPMViewer:
         self._last_tune_values: Dict[str, str] = {}
         self.bpm_by_name = {bpm.name: bpm for bpm in self.cfg.bpms}
         self.displayed_bpm_names: List[str] = []
-        self.strip_bpm_items: Dict[int, str] = {}
+        self.strip_marker_positions: Dict[str, Tuple[float, float]] = {}
 
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
@@ -1307,7 +1324,7 @@ class BPMViewer:
             return
         canvas = self.bpm_strip
         canvas.delete("all")
-        self.strip_bpm_items = {}
+        self.strip_marker_positions = {}
         bpms = sorted(self.cfg.bpms, key=lambda b: b.s_m)
         if not bpms:
             canvas.create_text(20, 30, text="No BPMs configured", anchor="w")
@@ -1328,21 +1345,21 @@ class BPMViewer:
                 fill = "#dddddd"
             outline = "#111111" if selected else "#ffffff"
             radius = 6 if bpm.known_orbit_pvs else 5
-            item = canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=fill, outline=outline, width=2, tags=("bpm", bpm.name))
-            self.strip_bpm_items[item] = bpm.name
+            self.strip_marker_positions[bpm.name] = (x, y)
+            tag = f"bpm:{bpm.name}"
+            canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=fill, outline=outline, width=2, tags=("bpm_marker", tag))
             canvas.create_text(x, y + 18, text=bpm.section if bpm.known_orbit_pvs else "", font=("TkDefaultFont", 7), fill="#404040")
         canvas.create_text(margin, 10, text="Ring BPMs by lattice position. Blue = locally confirmed/known candidate. Click marker to open.", anchor="w", fill="#303030")
 
     def on_bpm_strip_click(self, event) -> None:
-        item = self.bpm_strip.find_closest(event.x, event.y)
-        if not item:
-            return
-        bpm = self.strip_bpm_items.get(item[0])
+        bpm = nearest_bpm_marker(event.x, event.y, self.strip_marker_positions)
         if not bpm:
+            self.status.set("Click directly on a BPM marker to open a plot.")
             return
         self.select_bpm(bpm)
         self.session.event("main_bpm_marker_opened", bpm=bpm)
-        PlotWindow(self, [bpm])
+        self.status.set(f"Opening viewer for {bpm}...")
+        self.root.after(1, lambda bpm=bpm: PlotWindow(self, [bpm]))
 
     def select_bpm(self, bpm: str) -> None:
         for i, name in enumerate(self.displayed_bpm_names):
@@ -1400,7 +1417,8 @@ class BPMViewer:
         if not names:
             messagebox.showinfo("Select BPM", "Select one or more BPMs first.", parent=self.root)
             return
-        PlotWindow(self, names)
+        self.status.set(f"Opening viewer for {len(names)} BPM(s)...")
+        self.root.after(1, lambda names=list(names): PlotWindow(self, names))
 
     def apply_pv_templates(self) -> None:
         candidate = {key: var.get().strip() for key, var in self.pv_template_vars.items()}
