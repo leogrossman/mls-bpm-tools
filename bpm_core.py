@@ -470,10 +470,13 @@ def tune_value_to_frequency(value: object, fs: float, unit: str = "auto") -> Opt
     if not np.isfinite(numeric) or numeric <= 0:
         return None
     unit = unit.lower()
-    if unit == "tune" or (unit == "auto" and numeric <= 1.0):
+    if unit in ("tune", "q") or (unit == "auto" and numeric <= 1.0):
         tune = numeric
         freq = numeric * fs
-    elif unit == "khz" or (unit == "auto" and numeric <= 1000.0):
+    elif unit in ("millitune", "milli_tune", "mtune", "mq") or (unit == "auto" and numeric <= 1000.0):
+        tune = numeric / 1000.0
+        freq = tune * fs
+    elif unit == "khz":
         freq = numeric * 1000.0
         tune = freq / fs
     else:
@@ -484,21 +487,54 @@ def tune_value_to_frequency(value: object, fs: float, unit: str = "auto") -> Opt
     return freq, tune
 
 
-def tune_markers_from_values(tunes: Mapping[str, Mapping[str, object]], fs: float, include_harmonics: bool) -> List[Tuple[float, str, str]]:
+def tune_markers_from_values(
+    tunes: Mapping[str, Mapping[str, object]],
+    fs: float,
+    include_harmonics: bool,
+    max_harmonics: Optional[int] = None,
+    include_sidebands: bool = False,
+    sideband_order: int = 1,
+) -> List[Tuple[float, str, str]]:
     markers: List[Tuple[float, str, str]] = []
+    base_tunes: Dict[str, Tuple[float, float, str]] = {}
     for label, info in tunes.items():
         converted = tune_value_to_frequency(info.get("value"), fs, str(info.get("unit", "auto")))
         if converted is None:
             continue
         base_freq, tune = converted
+        base_tunes[label] = (base_freq, tune, str(info.get("color", "0.35")))
         color = str(info.get("color", "0.35"))
-        harmonics = int(info.get("harmonics", 1)) if include_harmonics else 1
+        configured_harmonics = int(info.get("harmonics", 1))
+        harmonics = configured_harmonics if include_harmonics else 1
+        if max_harmonics is not None:
+            harmonics = min(harmonics, max_harmonics)
         for harmonic in range(1, max(harmonics, 1) + 1):
             freq = base_freq * harmonic
             if freq > fs / 2:
                 break
             marker_label = f"{label} Q={tune:.4g}" if harmonic == 1 else f"{harmonic}{label}"
             markers.append((freq, marker_label, color))
+    if include_sidebands:
+        longitudinal = None
+        for candidate in ("Qz", "Qs", "Qsyn", "Qsync"):
+            if candidate in base_tunes:
+                longitudinal = base_tunes[candidate]
+                break
+        if longitudinal is not None:
+            _fz, qz, _cz = longitudinal
+            for transverse_label in ("Qx", "Qy"):
+                if transverse_label not in base_tunes:
+                    continue
+                _ft, qt, color = base_tunes[transverse_label]
+                for order in range(1, max(int(sideband_order), 0) + 1):
+                    for sign, sign_label in ((-1, "-"), (1, "+")):
+                        q = qt + sign * order * qz
+                        if q <= 0:
+                            continue
+                        freq = q * fs
+                        if freq > fs / 2:
+                            continue
+                        markers.append((freq, f"{transverse_label}{sign_label}{order}Qz", color))
     return markers
 
 

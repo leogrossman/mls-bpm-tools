@@ -10,14 +10,19 @@ This file tracks requested control-room BPM viewer work so implementation status
 - Main window has a clickable BPM lattice strip with compact beta-x/beta-y and Dx/Dy overlays, plus a BPM list.
 - BPM list can filter by BPM name or section, select all, select visible/filter, select known, and clear.
 - Plot windows can add/remove/toggle BPM overlays.
+- Plot windows can pull active BPM overlays from other open plot windows.
 - Plot windows have signal-combination checkboxes; standard default is `A+B+C+D` and `A`.
+- Plot windows open on the signal tab by default.
 - Plot windows combine raw phase/magnitude traces with their spectra in the common phase, magnitude, and all views.
 - Optional custom expression still exists for advanced combinations.
 - Legend can be toggled off.
 - Tune and harmonic markers can be toggled; invalid tune PV values are reported but not drawn.
+- Tune auto-scaling treats 1..1000 readbacks as milli-tune; explicit kHz remains available.
+- Optional Qx/Qy +/- m Qz synchrotron sideband guide markers can be toggled.
 - Spectrum frequency axes can be shown as kHz, Hz, or fractional tune.
 - Plot windows list detected spectrum peaks and tune marker status in a side pane.
 - Spectrum overlays can be normalized and visually stacked so multiple BPMs/signals stay visible.
+- Spectrum overlays have editable alpha, line width, auto offset, and manual drag offsets.
 - Plot and main windows show live performance/load indicators for PV count, sample count, bytes, elapsed time, cache hits, and lagging refreshes.
 - Default live plot refresh is 3 seconds and can be changed per plot window.
 - Plot-window settings are grouped into tabs so controls fit on shorter screens.

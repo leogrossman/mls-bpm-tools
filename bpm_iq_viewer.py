@@ -187,6 +187,10 @@ class PlotWindow(tk.Toplevel):
         self.running = True
         self.after_id: Optional[str] = None
         self.bpm_enabled: Dict[str, tk.BooleanVar] = {}
+        self.trace_offsets: Dict[str, float] = {}
+        self.spectrum_lines: List[Dict[str, object]] = []
+        self.drag_trace: Optional[Dict[str, object]] = None
+        self.app.register_plot_window(self)
 
         controls = ttk.Frame(self)
         controls.pack(side=tk.TOP, fill=tk.X, padx=6, pady=4)
@@ -213,9 +217,9 @@ class PlotWindow(tk.Toplevel):
         self.live = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Live", variable=self.live).pack(side=tk.LEFT, padx=10)
         self.show_tunes = tk.BooleanVar(value=show_tunes)
-        ttk.Checkbutton(controls, text="Tunes", variable=self.show_tunes).pack(side=tk.LEFT)
-        self.show_harmonics = tk.BooleanVar(value=True)
-        ttk.Checkbutton(controls, text="Harmonics", variable=self.show_harmonics).pack(side=tk.LEFT)
+        ttk.Checkbutton(controls, text="Tunes", variable=self.show_tunes, command=self.refresh).pack(side=tk.LEFT)
+        self.show_harmonics = tk.BooleanVar(value=False)
+        ttk.Checkbutton(controls, text="Harmonics", variable=self.show_harmonics, command=self.refresh).pack(side=tk.LEFT)
         self.show_legend = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Legend", variable=self.show_legend, command=self.refresh).pack(side=tk.LEFT, padx=(6, 0))
         self.normalize_spectra = tk.BooleanVar(value=True)
@@ -275,6 +279,7 @@ class PlotWindow(tk.Toplevel):
         self.add_bpm_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(add_row, text="Add", command=self.add_bpm_from_combo).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(bpm_box, text="Add main selection", command=self.add_main_selection).pack(fill=tk.X, pady=2)
+        ttk.Button(bpm_box, text="Add BPMs from open plot windows", command=self.add_open_window_bpms).pack(fill=tk.X, pady=2)
         toggle_row = ttk.Frame(bpm_box)
         toggle_row.pack(fill=tk.X, pady=2)
         ttk.Button(toggle_row, text="All on", command=lambda: self.set_all_bpms(True)).pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -308,6 +313,27 @@ class PlotWindow(tk.Toplevel):
         ttk.Entry(combo_box, textvariable=self.expr, width=26).pack(fill=tk.X, pady=(2, 0))
         ttk.Button(combo_box, text="Apply signals", command=self.refresh).pack(fill=tk.X, pady=(4, 0))
 
+        display_box = ttk.LabelFrame(signals_tab, text="Spectrum display", padding=6)
+        display_box.pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(display_box, text="alpha").grid(row=0, column=0, sticky="w")
+        self.spectrum_alpha_text = tk.StringVar(value="0.55")
+        ttk.Entry(display_box, textvariable=self.spectrum_alpha_text, width=8).grid(row=0, column=1, sticky="ew")
+        ttk.Label(display_box, text="line width").grid(row=1, column=0, sticky="w")
+        self.spectrum_linewidth_text = tk.StringVar(value="0.9")
+        ttk.Entry(display_box, textvariable=self.spectrum_linewidth_text, width=8).grid(row=1, column=1, sticky="ew")
+        ttk.Label(display_box, text="auto offset decades").grid(row=2, column=0, sticky="w")
+        self.stack_step_text = tk.StringVar(value="0.35")
+        ttk.Entry(display_box, textvariable=self.stack_step_text, width=8).grid(row=2, column=1, sticky="ew")
+        ttk.Button(display_box, text="Apply display", command=self.refresh).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        ttk.Button(display_box, text="Reset dragged offsets", command=self.reset_trace_offsets).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        ttk.Label(
+            display_box,
+            text="Drag a spectrum curve up/down to separate it. Offsets are in log10 decades and persist for this plot window.",
+            wraplength=210,
+            justify=tk.LEFT,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        display_box.columnconfigure(1, weight=1)
+
         tune_box = ttk.LabelFrame(analysis_tab, text="Spectrum markers", padding=6)
         tune_box.pack(fill=tk.X)
         ttk.Label(
@@ -316,6 +342,15 @@ class PlotWindow(tk.Toplevel):
             wraplength=210,
             justify=tk.LEFT,
         ).pack(anchor="w")
+        ttk.Label(tune_box, text="max harmonics").pack(anchor="w", pady=(6, 0))
+        self.max_harmonics_text = tk.StringVar(value="1")
+        ttk.Entry(tune_box, textvariable=self.max_harmonics_text, width=8).pack(anchor="w")
+        self.show_sidebands = tk.BooleanVar(value=False)
+        ttk.Checkbutton(tune_box, text="Show Qx/Qy +/- m Qz sidebands", variable=self.show_sidebands, command=self.refresh).pack(anchor="w", pady=(4, 0))
+        ttk.Label(tune_box, text="sideband order").pack(anchor="w")
+        self.sideband_order_text = tk.StringVar(value="1")
+        ttk.Entry(tune_box, textvariable=self.sideband_order_text, width=8).pack(anchor="w")
+        ttk.Button(tune_box, text="Apply marker settings", command=self.refresh).pack(fill=tk.X, pady=(4, 0))
 
         analysis_box = ttk.LabelFrame(analysis_tab, text="Tune status / spectrum peaks", padding=6)
         analysis_box.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
@@ -401,6 +436,9 @@ class PlotWindow(tk.Toplevel):
         self.canvas = FigureCanvasTkAgg(self.figure, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         NavigationToolbar2Tk(self.canvas, plot_frame).update()
+        self.canvas.mpl_connect("button_press_event", self.on_plot_press)
+        self.canvas.mpl_connect("motion_notify_event", self.on_plot_motion)
+        self.canvas.mpl_connect("button_release_event", self.on_plot_release)
         self.last_data: Dict[str, Dict[str, np.ndarray]] = {}
         self.last_errors: Dict[str, str] = {}
         self.logged_raw_snapshots: set = set()
@@ -414,6 +452,7 @@ class PlotWindow(tk.Toplevel):
         for bpm in self.bpm_names:
             self.add_bpm(bpm, refresh=False)
         self.rebuild_bpm_rows()
+        side_tabs.select(signals_tab)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.status.set("Viewer ready. Click Refresh now, or leave Live on for the first scheduled read.")
         self.after_id = self.after(100, self.refresh)
@@ -502,6 +541,17 @@ class PlotWindow(tk.Toplevel):
         self.phasor_cache.clear()
         self.refresh()
 
+    def add_open_window_bpms(self) -> None:
+        names = self.app.open_plot_bpm_names(exclude=self)
+        if not names:
+            messagebox.showinfo("No open BPMs", "No other open plot windows have BPM overlays yet.", parent=self)
+            return
+        for bpm in names:
+            self.add_bpm(bpm, refresh=False)
+        self.rebuild_bpm_rows()
+        self.phasor_cache.clear()
+        self.refresh()
+
     def set_all_bpms(self, enabled: bool) -> None:
         for var in self.bpm_enabled.values():
             var.set(enabled)
@@ -573,6 +623,7 @@ class PlotWindow(tk.Toplevel):
     def close(self) -> None:
         self.running = False
         self._cancel_pending_refresh()
+        self.app.unregister_plot_window(self)
         self.destroy()
 
     def save_data(self) -> None:
@@ -620,6 +671,45 @@ class PlotWindow(tk.Toplevel):
         except ValueError:
             value = 2500
         return min(max(value, 200), 200_000)
+
+    def spectrum_alpha(self) -> float:
+        try:
+            value = float(self.spectrum_alpha_text.get())
+        except ValueError:
+            value = 0.55
+        return min(max(value, 0.08), 1.0)
+
+    def spectrum_linewidth(self) -> float:
+        try:
+            value = float(self.spectrum_linewidth_text.get())
+        except ValueError:
+            value = 0.9
+        return min(max(value, 0.3), 4.0)
+
+    def stack_step_decades(self) -> float:
+        try:
+            value = float(self.stack_step_text.get())
+        except ValueError:
+            value = 0.35
+        return min(max(value, 0.0), 4.0)
+
+    def max_harmonics(self) -> int:
+        try:
+            value = int(self.max_harmonics_text.get())
+        except ValueError:
+            value = 1
+        return min(max(value, 1), 20)
+
+    def sideband_order(self) -> int:
+        try:
+            value = int(self.sideband_order_text.get())
+        except ValueError:
+            value = 1
+        return min(max(value, 0), 10)
+
+    def reset_trace_offsets(self) -> None:
+        self.trace_offsets.clear()
+        self.refresh()
 
     def decimated_xy(self, x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         stride = decimation_stride(min(x.size, y.size), self.max_time_points())
@@ -776,6 +866,8 @@ class PlotWindow(tk.Toplevel):
         settings = self.spectrum_settings() if needs_spectrum else SpectrumSettings()
         self.last_data = {}
         self.last_errors = {}
+        self.spectrum_lines = []
+        self.drag_trace = None
         self._refresh_array_pvs_read = 0
         self._refresh_cache_hits = 0
         self._refresh_analysis_hits = 0
@@ -785,7 +877,16 @@ class PlotWindow(tk.Toplevel):
         payload_bytes = 0
         array_pvs_planned = len(active_bpms) * len(buttons_to_plot) * 2
         buttons_key = tuple(buttons_needed)
-        tune_markers = self.app.current_tune_markers(include_harmonics=self.show_harmonics.get()) if self.show_tunes.get() else []
+        tune_markers = (
+            self.app.current_tune_markers(
+                include_harmonics=self.show_harmonics.get(),
+                max_harmonics=self.max_harmonics(),
+                include_sidebands=self.show_sidebands.get(),
+                sideband_order=self.sideband_order(),
+            )
+            if self.show_tunes.get()
+            else []
+        )
         if not active_bpms:
             axes[0].text(
                 0.5,
@@ -845,6 +946,7 @@ class PlotWindow(tk.Toplevel):
                 if mag is not None:
                     self.last_data[bpm][f"magnitude_{expr}"] = mag
                 self.log_raw_snapshot_once(bpm, expr, phasors, z)
+                trace_key = f"{bpm}:{expr}"
                 turns = np.arange(z.size)
                 plot_turns, plot_z_real = self.decimated_xy(turns, z.real)
 
@@ -872,7 +974,9 @@ class PlotWindow(tk.Toplevel):
                     p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
                     self._record_peaks(peak_records, label, "mag", f, p)
                     x = self._frequency_axis_values(f)
-                    axes[1].semilogy(x, self._spectrum_display_power(p, trace_index), label=display_label, alpha=0.78)
+                    spec_key = f"{trace_key}:mag"
+                    line = axes[1].semilogy(x, self._spectrum_display_power(p, trace_index, spec_key), label=display_label, alpha=self.spectrum_alpha(), linewidth=self.spectrum_linewidth())[0]
+                    self._remember_spectrum_line(line, p, trace_index, spec_key)
                     axes[1].set_xlabel(self._frequency_xlabel())
                     axes[1].set_ylabel(self._spectrum_ylabel("magnitude PSD"))
                     axes[1].set_xlim(*self._frequency_xlim())
@@ -887,7 +991,9 @@ class PlotWindow(tk.Toplevel):
                     p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
                     self._record_peaks(peak_records, label, "phase", f, p)
                     x = self._frequency_axis_values(f)
-                    axes[1].semilogy(x, self._spectrum_display_power(p, trace_index), label=display_label, alpha=0.78)
+                    spec_key = f"{trace_key}:phase"
+                    line = axes[1].semilogy(x, self._spectrum_display_power(p, trace_index, spec_key), label=display_label, alpha=self.spectrum_alpha(), linewidth=self.spectrum_linewidth())[0]
+                    self._remember_spectrum_line(line, p, trace_index, spec_key)
                     axes[1].set_xlabel(self._frequency_xlabel())
                     axes[1].set_ylabel(self._spectrum_ylabel("phase PSD"))
                     axes[1].set_xlim(*self._frequency_xlim())
@@ -910,8 +1016,12 @@ class PlotWindow(tk.Toplevel):
                     p_mag = normalize_power(p_mag_raw) if self.normalize_spectra.get() else p_mag_raw
                     self._record_peaks(peak_records, label, "phase", f_phase, p_phase)
                     self._record_peaks(peak_records, label, "mag", f_mag, p_mag)
-                    axes[0].semilogy(self._frequency_axis_values(f_phase), self._spectrum_display_power(p_phase, trace_index), label=display_label, alpha=0.78)
-                    axes[1].semilogy(self._frequency_axis_values(f_mag), self._spectrum_display_power(p_mag, trace_index), label=display_label, alpha=0.78)
+                    phase_key = f"{trace_key}:phase"
+                    mag_key = f"{trace_key}:mag"
+                    line = axes[0].semilogy(self._frequency_axis_values(f_phase), self._spectrum_display_power(p_phase, trace_index, phase_key), label=display_label, alpha=self.spectrum_alpha(), linewidth=self.spectrum_linewidth())[0]
+                    self._remember_spectrum_line(line, p_phase, trace_index, phase_key)
+                    line = axes[1].semilogy(self._frequency_axis_values(f_mag), self._spectrum_display_power(p_mag, trace_index, mag_key), label=display_label, alpha=self.spectrum_alpha(), linewidth=self.spectrum_linewidth())[0]
+                    self._remember_spectrum_line(line, p_mag, trace_index, mag_key)
                     axes[0].set_ylabel(self._spectrum_ylabel("phase PSD"))
                     axes[1].set_ylabel(self._spectrum_ylabel("magnitude PSD"))
                     axes[1].set_xlabel(self._frequency_xlabel())
@@ -932,7 +1042,9 @@ class PlotWindow(tk.Toplevel):
                     axes[1].plot(phase_turns, plot_phase, label=display_label)
                     axes[2].plot(det_turns, detrended, label=display_label)
                     axes[2].plot(det_turns, windowed, label=f"{display_label} windowed", alpha=0.65, linestyle="--")
-                    axes[3].semilogy(self._frequency_axis_values(phase_spec["frequency_hz"]), self._spectrum_display_power(p, trace_index), label=display_label, alpha=0.78)
+                    spec_key = f"{trace_key}:phase"
+                    line = axes[3].semilogy(self._frequency_axis_values(phase_spec["frequency_hz"]), self._spectrum_display_power(p, trace_index, spec_key), label=display_label, alpha=self.spectrum_alpha(), linewidth=self.spectrum_linewidth())[0]
+                    self._remember_spectrum_line(line, p, trace_index, spec_key)
                     axes[0].set_ylabel("angle(z) [rad]")
                     axes[1].set_ylabel("phase [rad]")
                     axes[2].set_ylabel("detrended/windowed")
@@ -955,8 +1067,12 @@ class PlotWindow(tk.Toplevel):
                     p_mag = normalize_power(p_mag_raw) if self.normalize_spectra.get() else p_mag_raw
                     self._record_peaks(peak_records, label, "phase", f_phase, p_phase)
                     self._record_peaks(peak_records, label, "mag", f_mag, p_mag)
-                    axes[2].semilogy(self._frequency_axis_values(f_mag), self._spectrum_display_power(p_mag, trace_index), label=display_label, alpha=0.78)
-                    axes[3].semilogy(self._frequency_axis_values(f_phase), self._spectrum_display_power(p_phase, trace_index), label=display_label, alpha=0.78)
+                    mag_key = f"{trace_key}:mag"
+                    phase_key = f"{trace_key}:phase"
+                    line = axes[2].semilogy(self._frequency_axis_values(f_mag), self._spectrum_display_power(p_mag, trace_index, mag_key), label=display_label, alpha=self.spectrum_alpha(), linewidth=self.spectrum_linewidth())[0]
+                    self._remember_spectrum_line(line, p_mag, trace_index, mag_key)
+                    line = axes[3].semilogy(self._frequency_axis_values(f_phase), self._spectrum_display_power(p_phase, trace_index, phase_key), label=display_label, alpha=self.spectrum_alpha(), linewidth=self.spectrum_linewidth())[0]
+                    self._remember_spectrum_line(line, p_phase, trace_index, phase_key)
                     axes[0].set_title("magnitude")
                     axes[0].set_ylabel("|phasor|")
                     axes[1].set_title("phase")
@@ -1090,11 +1206,84 @@ class PlotWindow(tk.Toplevel):
             return f"{value:.4g} kHz"
         return f"{value:.4g} Hz"
 
-    def _spectrum_display_power(self, power: np.ndarray, trace_index: int) -> np.ndarray:
+    def _spectrum_display_power(self, power: np.ndarray, trace_index: int, trace_key: str) -> np.ndarray:
         out = np.maximum(np.asarray(power, dtype=float), 1e-30)
+        offset_decades = self.trace_offsets.get(trace_key, 0.0)
         if self.stack_spectra.get():
-            out = out * (10.0 ** (-0.45 * max(trace_index, 0)))
+            offset_decades -= self.stack_step_decades() * max(trace_index, 0)
+        if offset_decades:
+            out = out * (10.0 ** offset_decades)
         return out
+
+    def _remember_spectrum_line(self, line: object, base_power: np.ndarray, trace_index: int, trace_key: str) -> None:
+        try:
+            line.set_picker(5)
+        except Exception:
+            pass
+        self.spectrum_lines.append(
+            {
+                "line": line,
+                "base_power": np.maximum(np.asarray(base_power, dtype=float), 1e-30),
+                "trace_index": trace_index,
+                "trace_key": trace_key,
+            }
+        )
+
+    def on_plot_press(self, event) -> None:
+        if event.button != 1 or event.inaxes is None:
+            return
+        best: Optional[Dict[str, object]] = None
+        for item in self.spectrum_lines:
+            line = item["line"]
+            try:
+                contains, _details = line.contains(event)
+            except Exception:
+                contains = False
+            if contains:
+                best = item
+                break
+        if best is None:
+            return
+        self.drag_trace = {
+            **best,
+            "start_y": float(event.y),
+            "start_offset": self.trace_offsets.get(str(best["trace_key"]), 0.0),
+        }
+        self.status.set(f"Dragging spectrum offset for {best['trace_key']}")
+
+    def on_plot_motion(self, event) -> None:
+        if not self.drag_trace or event.y is None:
+            return
+        trace_key = str(self.drag_trace["trace_key"])
+        start_y = float(self.drag_trace["start_y"])
+        start_offset = float(self.drag_trace["start_offset"])
+        delta_decades = (float(event.y) - start_y) / 90.0
+        self.trace_offsets[trace_key] = min(max(start_offset + delta_decades, -12.0), 12.0)
+        self._update_dragged_trace(trace_key)
+        self.canvas.draw_idle()
+
+    def on_plot_release(self, _event) -> None:
+        if not self.drag_trace:
+            return
+        trace_key = str(self.drag_trace["trace_key"])
+        self.app.session.event("spectrum_trace_offset_updated", trace=trace_key, offset_decades=self.trace_offsets.get(trace_key, 0.0))
+        self.status.set(f"Spectrum offset {trace_key}: {self.trace_offsets.get(trace_key, 0.0):+.2f} decades")
+        self.drag_trace = None
+
+    def _update_dragged_trace(self, trace_key: str) -> None:
+        for item in self.spectrum_lines:
+            if str(item["trace_key"]) != trace_key:
+                continue
+            line = item["line"]
+            y = self._spectrum_display_power(
+                np.asarray(item["base_power"], dtype=float),
+                int(item["trace_index"]),
+                trace_key,
+            )
+            try:
+                line.set_ydata(y)
+            except Exception:
+                pass
 
     def _display_label(self, label: str, trace_index: int) -> str:
         if self.stack_spectra.get() and trace_index:
@@ -1364,6 +1553,7 @@ class BPMViewer:
         self.bpm_by_name = {bpm.name: bpm for bpm in self.cfg.bpms}
         self.displayed_bpm_names: List[str] = []
         self.strip_marker_positions: Dict[str, Tuple[float, float]] = {}
+        self.plot_windows: List[PlotWindow] = []
 
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
@@ -1479,6 +1669,30 @@ class BPMViewer:
         main.columnconfigure(0, weight=1)
         self.status.set(f"{mode_label}. No plot is opened automatically; click a BPM marker or double-click a list row.")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def register_plot_window(self, window: PlotWindow) -> None:
+        self.plot_windows = [item for item in self.plot_windows if item.winfo_exists()]
+        if window not in self.plot_windows:
+            self.plot_windows.append(window)
+
+    def unregister_plot_window(self, window: PlotWindow) -> None:
+        self.plot_windows = [item for item in self.plot_windows if item is not window and item.winfo_exists()]
+
+    def open_plot_bpm_names(self, exclude: Optional[PlotWindow] = None) -> List[str]:
+        names: List[str] = []
+        for window in list(self.plot_windows):
+            if window is exclude:
+                continue
+            try:
+                exists = window.winfo_exists()
+            except Exception:
+                exists = False
+            if not exists:
+                continue
+            for bpm in window.active_bpm_names():
+                if bpm not in names:
+                    names.append(bpm)
+        return names
 
     def populate_bpms(self) -> None:
         q = self.search.get().strip().lower()
@@ -1774,9 +1988,22 @@ class BPMViewer:
                     self.session.event("tune_pv_error", label=item.label, pv=item.pv, error=message)
                     self._last_tune_values[item.pv] = error_marker
 
-    def current_tune_markers(self, include_harmonics: bool) -> List[Tuple[float, str, str]]:
+    def current_tune_markers(
+        self,
+        include_harmonics: bool,
+        max_harmonics: int = 1,
+        include_sidebands: bool = False,
+        sideband_order: int = 1,
+    ) -> List[Tuple[float, str, str]]:
         self.refresh_tunes()
-        return tune_markers_from_values(self._tune_values, self.cfg.sample_rate_hz, include_harmonics)
+        return tune_markers_from_values(
+            self._tune_values,
+            self.cfg.sample_rate_hz,
+            include_harmonics,
+            max_harmonics=max_harmonics,
+            include_sidebands=include_sidebands,
+            sideband_order=sideband_order,
+        )
 
     def tune_status_lines(self) -> List[str]:
         lines: List[str] = []

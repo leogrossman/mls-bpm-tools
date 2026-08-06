@@ -64,7 +64,10 @@ Raw snapshots are bounded and intended for regression/debugging, not long-term a
 - `Refresh s`: live plot refresh interval. The default is 3 seconds because a few BPMs already mean many large waveform PVs.
 - `Normalize spectra`: scales each plotted spectrum to its own maximum.
 - `Stack spectra`: applies a small visual offset so overlaid spectra do not hide each other.
-- `Tunes` / `Harmonics`: reads configured tune PVs and draws only valid in-range markers. Auto tune units treat values `0..1` as tune fraction, values `1..1000` as kHz, and larger values as Hz.
+- Spectrum display controls: `alpha`, `line width`, and `auto offset decades` tune how strongly overlaid spectra are drawn. Drag a spectrum curve up/down to add a manual per-trace log-scale offset inside that plot window.
+- `Tunes` / `Harmonics`: reads configured tune PVs and draws only valid in-range markers. Harmonics are capped by the plot-window `max harmonics` value and default to base tune only.
+- Sidebands: optional guide markers for `Qx +/- m Qz` and `Qy +/- m Qz`, capped by `sideband order`.
+- Auto tune units treat values `0..1` as fractional tune, values `1..1000` as milli-tune, explicit `kHz` as kilohertz, and larger auto values as Hz.
 - `Tune status / spectrum peaks`: lists tune PV status plus automatically detected spectrum peaks.
 - `max time points`: display-only decimation for raw time traces. Spectra still use the full waveform block.
 

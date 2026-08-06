@@ -305,6 +305,10 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(tune, 0.2)
 
         freq, tune = tune_value_to_frequency(13.5, 6250e3, "auto")
+        self.assertEqual(freq, 84_375.0)
+        self.assertAlmostEqual(tune, 0.0135)
+
+        freq, tune = tune_value_to_frequency(13.5, 6250e3, "kHz")
         self.assertEqual(freq, 13_500.0)
         self.assertAlmostEqual(tune, 13_500.0 / 6250e3)
 
@@ -312,9 +316,24 @@ class BPMIQViewerTest(unittest.TestCase):
             {"Qx": {"value": 0.2, "unit": "auto", "color": "blue", "harmonics": 3}},
             fs=1000.0,
             include_harmonics=True,
+            max_harmonics=3,
         )
 
         self.assertEqual([item[0] for item in markers], [200.0, 400.0])
+
+        sidebands = tune_markers_from_values(
+            {
+                "Qx": {"value": 0.25, "unit": "auto", "color": "blue", "harmonics": 1},
+                "Qz": {"value": 0.02, "unit": "auto", "color": "green", "harmonics": 1},
+            },
+            fs=1000.0,
+            include_harmonics=False,
+            include_sidebands=True,
+            sideband_order=2,
+        )
+        self.assertIn((230.0, "Qx-1Qz", "blue"), sidebands)
+        self.assertIn((270.0, "Qx+1Qz", "blue"), sidebands)
+        self.assertIn((210.0, "Qx-2Qz", "blue"), sidebands)
 
         bad_markers = tune_markers_from_values(
             {

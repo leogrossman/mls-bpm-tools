@@ -42,6 +42,10 @@ The default signals are:
 
 Use the `Signals to plot` panel to add B/C/D, difference candidates, mean, or a custom expression. `Normalize spectra` and `Stack spectra` are on by default so overlaid spectra stay visible instead of covering each other.
 
+Plot windows open on the `Signals` tab by default. Use the `Spectrum display` controls there to make overlaid spectra thinner, more transparent, or more separated. You can also drag a visible spectrum curve up/down to give that trace a manual log-scale offset. `Reset dragged offsets` clears those manual shifts.
+
+The `BPMs` tab can add BPMs from the main-window selection or from other open plot windows, so two separate BPM views can be combined into one overlay plot.
+
 Use the plot selector for focused views:
 
 - `phase`: unwrapped phase plus phase spectrum.
@@ -59,7 +63,9 @@ The `FFT / perf` tab explains the calculation from complex raw I/Q to phase and 
 
 ## Tunes And Peaks
 
-In a plot window, enable `Tunes` to read the configured tune PVs. Bad or out-of-range values are shown as errors in the side pane and are not drawn as plot markers. Enable `Harmonics` to draw valid harmonic markers.
+In a plot window, enable `Tunes` to read the configured tune PVs. Bad or out-of-range values are shown as errors in the side pane and are not drawn as plot markers. Harmonics are off by default; enable `Harmonics` and set `max harmonics` in the `Analysis` tab when you want them.
+
+Enable sidebands in the `Analysis` tab to mark simple synchrotron/betatron mixing candidates `Qx +/- m Qz` and `Qy +/- m Qz`. These are guide markers, not fitted peaks.
 
 The `Tune status / spectrum peaks` pane lists:
 
