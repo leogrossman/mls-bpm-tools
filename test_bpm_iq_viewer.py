@@ -12,7 +12,9 @@ from bpm_core import (
     COMBINATION_PRESETS,
     combine_selected_expressions,
     combination_expression,
+    estimate_iq_payload,
     find_spectrum_peaks,
+    human_bytes,
     nearest_bpm_marker,
     normalize_button_tokens,
     normalize_power,
@@ -136,9 +138,18 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(cfg.raw_scan_on_value, "1 second")
         self.assertEqual(cfg.raw_scan_off_value, "Passive")
         self.assertEqual([item.pv for item in cfg.tune_pvs], ["TUNEZRP:measX", "TUNEZRP:measY", "TUNEZRP:measZ"])
+        self.assertGreaterEqual(cfg.refresh_ms, 3000)
         self.assertFalse(next(item for item in cfg.status_pvs if item.pv == "BBQRP:X:DRIVEO").enabled)
         self.assertTrue(next(item for item in cfg.status_pvs if item.pv == "WFGEN2C1CP:stOut").enabled)
         self.assertLessEqual(cfg.epics_scalar_timeout_s, 0.5)
+
+    def test_iq_payload_estimate_matches_iq_waveform_count(self):
+        payload = estimate_iq_payload(n_bpms=2, n_buttons=4, n_samples=8192)
+
+        self.assertEqual(payload["pv_count"], 16.0)
+        self.assertEqual(payload["samples"], 131072.0)
+        self.assertEqual(payload["bytes"], 1048576.0)
+        self.assertEqual(human_bytes(payload["bytes"]), "1.0 MiB")
 
     def test_config_save_roundtrip_keeps_runtime_pv_edits(self):
         with tempfile.TemporaryDirectory() as tmp:

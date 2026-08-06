@@ -94,7 +94,9 @@ from bpm_core import (
     TunePV,
     combine_selected_expressions,
     combination_expression,
+    estimate_iq_payload,
     find_spectrum_peaks,
+    human_bytes,
     nearest_bpm_marker,
     normalize_button_tokens,
     normalize_power,
@@ -215,12 +217,18 @@ class PlotWindow(tk.Toplevel):
         ttk.Checkbutton(controls, text="Normalize spectra", variable=self.normalize_spectra, command=self.refresh).pack(side=tk.LEFT, padx=(6, 0))
         self.stack_spectra = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Stack spectra", variable=self.stack_spectra, command=self.refresh).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(controls, text="Refresh s:").pack(side=tk.LEFT, padx=(8, 2))
+        self.refresh_seconds = tk.StringVar(value=f"{self.app.cfg.refresh_ms / 1000.0:.1f}")
+        ttk.Entry(controls, textvariable=self.refresh_seconds, width=5).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Apply", command=self.apply_refresh_interval).pack(side=tk.LEFT, padx=(2, 4))
         ttk.Button(controls, text="Refresh now", command=lambda: self.refresh(force_read=True)).pack(side=tk.LEFT)
         ttk.Button(controls, text="Pause", command=self.toggle_pause).pack(side=tk.LEFT, padx=4)
         ttk.Button(controls, text="Save data", command=self.save_data).pack(side=tk.LEFT, padx=4)
 
         self.status = tk.StringVar(value="Ready")
         ttk.Label(self, textvariable=self.status, anchor="w").pack(fill=tk.X, padx=6)
+        self.performance_status = tk.StringVar(value="Load: waiting for first refresh")
+        ttk.Label(self, textvariable=self.performance_status, anchor="w").pack(fill=tk.X, padx=6)
 
         body = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True)
@@ -313,7 +321,8 @@ class PlotWindow(tk.Toplevel):
         self.last_errors: Dict[str, str] = {}
         self.logged_raw_snapshots: set = set()
         self.phasor_cache: Dict[Tuple[str, Tuple[str, ...]], Tuple[float, Dict[str, np.ndarray]]] = {}
-        self.cache_ttl_s = max(self.app.cfg.refresh_ms / 1000.0 * 0.8, 0.25)
+        self.last_perf_log_s = 0.0
+        self.update_cache_ttl()
         for bpm in self.bpm_names:
             self.add_bpm(bpm, refresh=False)
         self.rebuild_bpm_rows()
@@ -428,6 +437,25 @@ class PlotWindow(tk.Toplevel):
         if self.running:
             self.refresh()
 
+    def update_cache_ttl(self) -> None:
+        self.cache_ttl_s = max(self.app.cfg.refresh_ms / 1000.0 * 0.8, 0.25)
+
+    def current_refresh_ms(self) -> int:
+        try:
+            seconds = float(self.refresh_seconds.get())
+        except ValueError:
+            seconds = self.app.cfg.refresh_ms / 1000.0
+        seconds = min(max(seconds, 0.25), 60.0)
+        return int(round(seconds * 1000.0))
+
+    def apply_refresh_interval(self) -> None:
+        refresh_ms = self.current_refresh_ms()
+        self.app.cfg.refresh_ms = refresh_ms
+        self.refresh_seconds.set(f"{refresh_ms / 1000.0:.2g}")
+        self.update_cache_ttl()
+        self.app.session.event("plot_refresh_interval_updated", refresh_ms=refresh_ms)
+        self.status.set(f"Live refresh interval set to {refresh_ms / 1000.0:.2g} s")
+
     def close(self) -> None:
         self.running = False
         self._cancel_pending_refresh()
@@ -475,7 +503,7 @@ class PlotWindow(tk.Toplevel):
     def log_raw_snapshot_once(self, bpm: str, expr: str, phasors: Mapping[str, np.ndarray], z: np.ndarray) -> None:
         if not self.log_raw_snapshots.get():
             return
-        key = (bpm, expr)
+        key = bpm
         if key in self.logged_raw_snapshots:
             return
         self.logged_raw_snapshots.add(key)
@@ -506,7 +534,7 @@ class PlotWindow(tk.Toplevel):
             self.status.set(str(exc))
         finally:
             if self.running and self.live.get() and self.winfo_exists():
-                self.after_id = self.after(self.app.cfg.refresh_ms, self.refresh)
+                self.after_id = self.after(self.current_refresh_ms(), self.refresh)
 
     def _cancel_pending_refresh(self) -> None:
         if not self.after_id:
@@ -522,12 +550,15 @@ class PlotWindow(tk.Toplevel):
         cached = self.phasor_cache.get(key)
         now = time.monotonic()
         if cached and not force_read and now - cached[0] <= self.cache_ttl_s:
+            self._refresh_cache_hits += 1
             return cached[1]
         phasors = read_button_phasors(self.app.backend, self.app.cfg, bpm, buttons_needed)
+        self._refresh_array_pvs_read += len(buttons_needed) * 2
         self.phasor_cache[key] = (now, phasors)
         return phasors
 
     def _refresh_impl(self, force_read: bool = False) -> None:
+        refresh_started = time.perf_counter()
         kind = self.plot_kind.get()
         if kind == "phase spectrum":
             kind = "phase"
@@ -557,8 +588,13 @@ class PlotWindow(tk.Toplevel):
         settings = self.spectrum_settings() if needs_spectrum else SpectrumSettings()
         self.last_data = {}
         self.last_errors = {}
+        self._refresh_array_pvs_read = 0
+        self._refresh_cache_hits = 0
         peak_records: List[Tuple[str, str, float, float]] = []
         trace_index = 0
+        payload_complex_samples = 0
+        payload_bytes = 0
+        array_pvs_planned = len(active_bpms) * len(buttons_to_plot) * 2
         tune_markers = self.app.current_tune_markers(include_harmonics=self.show_harmonics.get()) if self.show_tunes.get() else []
         if not active_bpms:
             axes[0].text(
@@ -585,6 +621,8 @@ class PlotWindow(tk.Toplevel):
                 )
                 continue
             self.last_data[bpm] = dict(phasors)
+            payload_complex_samples += sum(int(value.size) for value in phasors.values())
+            payload_bytes += sum(int(value.nbytes) for value in phasors.values())
             for expr in expressions:
                 try:
                     z = combination_expression(phasors, expr)
@@ -703,18 +741,19 @@ class PlotWindow(tk.Toplevel):
                     p_mag = normalize_power(p_mag_raw) if self.normalize_spectra.get() else p_mag_raw
                     self._record_peaks(peak_records, label, "phase", f_phase, p_phase)
                     self._record_peaks(peak_records, label, "mag", f_mag, p_mag)
-                    axes[2].semilogy(self._frequency_axis_values(f_phase), self._spectrum_display_power(p_phase, trace_index), label=display_label, alpha=0.78)
-                    axes[3].semilogy(self._frequency_axis_values(f_mag), self._spectrum_display_power(p_mag, trace_index), label=display_label, alpha=0.78)
+                    axes[2].semilogy(self._frequency_axis_values(f_mag), self._spectrum_display_power(p_mag, trace_index), label=display_label, alpha=0.78)
+                    axes[3].semilogy(self._frequency_axis_values(f_phase), self._spectrum_display_power(p_phase, trace_index), label=display_label, alpha=0.78)
                     axes[0].set_title("magnitude")
                     axes[0].set_ylabel("|phasor|")
                     axes[1].set_title("phase")
                     axes[1].set_ylabel("unwrapped phase [rad]")
-                    axes[2].set_title("phase spectrum" + (" (normalized)" if self.normalize_spectra.get() else "") + (" (stacked)" if self.stack_spectra.get() else ""))
-                    axes[2].set_ylabel(self._spectrum_ylabel("phase PSD"))
+                    axes[2].set_title("magnitude spectrum" + (" (normalized)" if self.normalize_spectra.get() else "") + (" (stacked)" if self.stack_spectra.get() else ""))
+                    axes[2].set_xlabel(self._frequency_xlabel())
+                    axes[2].set_ylabel(self._spectrum_ylabel("magnitude PSD"))
                     axes[2].set_xlim(*self._frequency_xlim())
-                    axes[3].set_title("magnitude spectrum" + (" (normalized)" if self.normalize_spectra.get() else "") + (" (stacked)" if self.stack_spectra.get() else ""))
+                    axes[3].set_title("phase spectrum" + (" (normalized)" if self.normalize_spectra.get() else "") + (" (stacked)" if self.stack_spectra.get() else ""))
                     axes[3].set_xlabel(self._frequency_xlabel())
-                    axes[3].set_ylabel(self._spectrum_ylabel("magnitude PSD"))
+                    axes[3].set_ylabel(self._spectrum_ylabel("phase PSD"))
                     axes[3].set_xlim(*self._frequency_xlim())
                 trace_index += 1
 
@@ -756,6 +795,42 @@ class PlotWindow(tk.Toplevel):
                 ax.legend(loc="best")
         self.figure.tight_layout()
         self.canvas.draw_idle()
+        elapsed_ms = (time.perf_counter() - refresh_started) * 1000.0
+        interval_ms = max(self.current_refresh_ms(), 1)
+        scalar_samples = payload_complex_samples * 2
+        samples_per_waveform = int(scalar_samples / max(array_pvs_planned, 1))
+        estimate = estimate_iq_payload(len(active_bpms), len(buttons_to_plot), samples_per_waveform)
+        rate_bps = payload_bytes / max(elapsed_ms / 1000.0, 1e-9)
+        lag = elapsed_ms > interval_ms
+        perf_text = (
+            "Load: "
+            f"{len(active_bpms)} BPM, {len(buttons_to_plot)} button(s), {array_pvs_planned} array PVs planned/"
+            f"{self._refresh_array_pvs_read} fresh, {self._refresh_cache_hits} cache hit(s), "
+            f"{scalar_samples:,} scalar samples, {human_bytes(payload_bytes)} processed, "
+            f"{elapsed_ms:.0f} ms ({human_bytes(rate_bps)}/s)"
+            + (" LAGGING" if lag else "")
+        )
+        self.performance_status.set(perf_text)
+        self.app.performance_status.set("Performance: " + perf_text.removeprefix("Load: "))
+        now = time.monotonic()
+        if lag or now - self.last_perf_log_s > 10.0:
+            self.app.session.event(
+                "plot_refresh_perf",
+                bpm_count=len(active_bpms),
+                expression_count=len(expressions),
+                button_count=len(buttons_to_plot),
+                array_pvs_planned=array_pvs_planned,
+                array_pvs_read=self._refresh_array_pvs_read,
+                cache_hits=self._refresh_cache_hits,
+                scalar_samples=scalar_samples,
+                bytes_processed=payload_bytes,
+                estimated_payload_bytes=estimate["bytes"],
+                elapsed_ms=round(elapsed_ms, 3),
+                refresh_ms=interval_ms,
+                lagging=lag,
+                plot_kind=kind,
+            )
+            self.last_perf_log_s = now
         suffix = f"; {len(self.last_errors)} error(s)" if self.last_errors else ""
         tune_suffix = f"; {len(tune_markers)} tune marker(s)" if tune_markers else ""
         self.status.set(f"Updated {time.strftime('%H:%M:%S')} - {len(active_bpms)} BPM(s), signals {expr_text}{tune_suffix}{suffix}")
@@ -1138,6 +1213,8 @@ class BPMViewer:
 
         self.status = tk.StringVar(value=mode_label)
         ttk.Label(main, textvariable=self.status).grid(row=14, column=0, columnspan=2, sticky="w", pady=8)
+        self.performance_status = tk.StringVar(value="Performance: no plot refresh yet")
+        ttk.Label(main, textvariable=self.performance_status).grid(row=15, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         main.rowconfigure(5, weight=1)
         main.columnconfigure(0, weight=1)

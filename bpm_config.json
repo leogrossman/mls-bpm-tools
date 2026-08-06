@@ -1,7 +1,7 @@
 {
   "sample_rate_hz": 6250000.0,
   "ddc_frequency_hz": null,
-  "refresh_ms": 1000,
+  "refresh_ms": 3000,
   "epics_array_timeout_s": 2.0,
   "epics_scalar_timeout_s": 0.25,
   "pv_templates": {

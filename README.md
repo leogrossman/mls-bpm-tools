@@ -39,6 +39,7 @@ python3 bpm_iq_viewer.py --demo
 - Plot windows default to the `all` view with `A+B+C+D` first, then `A`; this shows raw magnitude, phase, phase spectrum, and magnitude spectrum.
 - Spectrum traces are normalized and visually stacked by default so multiple BPMs/signals can be compared without one trace hiding the rest.
 - The plot side pane lists tune PV status, valid tune/harmonic markers, and automatically detected spectrum peaks in the selected frequency units.
+- Live plots default to a 3 second refresh and show a load/performance line with PV count, sample count, processed bytes, elapsed time, and lag status.
 - Recent raw BPM reads are cached briefly inside each plot window to avoid repeated EPICS reads during UI-only redraws.
 
 ## Tests

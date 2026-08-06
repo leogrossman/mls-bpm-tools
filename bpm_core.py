@@ -17,6 +17,7 @@ import numpy as np
 
 
 DEFAULT_SAMPLE_RATE = 6.25e6
+DEFAULT_REFRESH_MS = 3000
 BUTTONS = ("A", "B", "C", "D")
 COMBINATION_PRESETS = (
     ("Sum A+B+C+D", "A+B+C+D"),
@@ -82,7 +83,7 @@ class AppConfig:
     tune_pvs: List[TunePV] = field(default_factory=list)
     sample_rate_hz: float = DEFAULT_SAMPLE_RATE
     ddc_frequency_hz: Optional[float] = None
-    refresh_ms: int = 1000
+    refresh_ms: int = DEFAULT_REFRESH_MS
     epics_array_timeout_s: float = 2.0
     epics_scalar_timeout_s: float = 0.25
     raw_scan_on_value: str = "1 second"
@@ -100,7 +101,7 @@ class AppConfig:
             tune_pvs=[TunePV(**item) for item in raw.get("tune_pvs", [])],
             sample_rate_hz=float(raw.get("sample_rate_hz", DEFAULT_SAMPLE_RATE)),
             ddc_frequency_hz=raw.get("ddc_frequency_hz"),
-            refresh_ms=int(raw.get("refresh_ms", 1000)),
+            refresh_ms=int(raw.get("refresh_ms", DEFAULT_REFRESH_MS)),
             epics_array_timeout_s=float(raw.get("epics_array_timeout_s", 2.0)),
             epics_scalar_timeout_s=float(raw.get("epics_scalar_timeout_s", 0.25)),
             raw_scan_on_value=str(raw.get("raw_scan_on_value", "1 second")),
@@ -200,6 +201,28 @@ def read_button_phasors(backend: Backend, cfg: AppConfig, bpm: str, buttons: Ite
         raise RuntimeError("No buttons selected")
     n_min = min(v.size for v in out.values())
     return {k: v[:n_min] for k, v in out.items()}
+
+
+def estimate_iq_payload(n_bpms: int, n_buttons: int, n_samples: int, bytes_per_scalar: int = 8) -> Dict[str, float]:
+    """Estimate raw I/Q array payload for one refresh.
+
+    Each complex button comes from two scalar waveform PVs: I and Q. The EPICS
+    backend currently converts each scalar waveform to float64, so the default
+    payload estimate uses 8 bytes per scalar sample.
+    """
+    pv_count = max(int(n_bpms), 0) * max(int(n_buttons), 0) * 2
+    samples = pv_count * max(int(n_samples), 0)
+    bytes_total = samples * max(int(bytes_per_scalar), 0)
+    return {"pv_count": float(pv_count), "samples": float(samples), "bytes": float(bytes_total)}
+
+
+def human_bytes(value: float) -> str:
+    units = ("B", "KiB", "MiB", "GiB")
+    amount = float(value)
+    for unit in units:
+        if abs(amount) < 1024.0 or unit == units[-1]:
+            return f"{amount:.1f} {unit}" if unit != "B" else f"{amount:.0f} {unit}"
+        amount /= 1024.0
 
 
 def tbt_scan_commands(cfg: AppConfig, names: Sequence[str], enabled: bool) -> List[Tuple[str, object]]:

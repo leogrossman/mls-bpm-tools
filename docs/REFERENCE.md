@@ -61,10 +61,33 @@ Raw snapshots are bounded and intended for regression/debugging, not long-term a
 - `spectra`: shows phase spectrum and magnitude spectrum together.
 - `phase debug`: shows wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.
 - `Freq`: displays spectra, tune markers, and peak listings as `kHz`, `Hz`, or fractional tune `Q=f/f_rev`.
+- `Refresh s`: live plot refresh interval. The default is 3 seconds because a few BPMs already mean many large waveform PVs.
 - `Normalize spectra`: scales each plotted spectrum to its own maximum.
 - `Stack spectra`: applies a small visual offset so overlaid spectra do not hide each other.
 - `Tunes` / `Harmonics`: reads configured tune PVs and draws only valid in-range markers. Auto tune units treat values `0..1` as tune fraction, values `1..1000` as kHz, and larger values as Hz.
 - `Tune status / spectrum peaks`: lists tune PV status plus automatically detected spectrum peaks.
+
+## Data Rate And Performance
+
+For every selected BPM and every required button, the tool reads two waveform PVs:
+
+```text
+I_button and Q_button
+```
+
+The current EPICS backend converts each waveform to `float64`, so a practical per-refresh payload estimate is:
+
+```text
+bytes ~= BPM_count * button_count * 2 * waveform_samples * 8
+```
+
+Example: 2 BPMs, 4 buttons, and 8192 samples per waveform is:
+
+```text
+2 * 4 * 2 * 8192 * 8 = 1.0 MiB
+```
+
+That is only the raw I/Q payload for one fresh read. Plotting and FFTs add CPU work. Each plot window therefore shows a `Load:` line with planned array PVs, fresh reads, cache hits, scalar samples, processed bytes, elapsed time, and a `LAGGING` marker if the refresh takes longer than the selected interval. The main window repeats the latest performance line globally.
 
 ## Code Layout
 
