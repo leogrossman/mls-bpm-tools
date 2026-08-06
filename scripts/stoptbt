@@ -1,0 +1,3 @@
+#!/bin/sh
+./caput_many signals:ddc_raw.SCAN "Passive"
+./caput_many signals:ddc_synth.SCAN "Passive"

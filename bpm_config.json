@@ -7,7 +7,8 @@
   "pv_templates": {
     "scan": "{bpm}:signals:ddc_raw.SCAN",
     "i": "{bpm}:signals:ddc_raw.I{button}",
-    "q": "{bpm}:signals:ddc_raw.Q{button}"
+    "q": "{bpm}:signals:ddc_raw.Q{button}",
+    "synth_scan": "{bpm}:signals:ddc_synth.SCAN"
   },
   "tune_pvs": [
     {
@@ -574,5 +575,7 @@
       ],
       "known_orbit_pvs": false
     }
-  ]
+  ],
+  "raw_scan_on_value": "1 second",
+  "raw_scan_off_value": "Passive"
 }

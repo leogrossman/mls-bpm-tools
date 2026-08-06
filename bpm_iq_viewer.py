@@ -162,6 +162,8 @@ class AppConfig:
     refresh_ms: int = 1000
     epics_array_timeout_s: float = 2.0
     epics_scalar_timeout_s: float = 0.25
+    raw_scan_on_value: str = "1 second"
+    raw_scan_off_value: str = "Passive"
     source_path: Optional[Path] = None
 
     @classmethod
@@ -178,6 +180,8 @@ class AppConfig:
             refresh_ms=int(raw.get("refresh_ms", 1000)),
             epics_array_timeout_s=float(raw.get("epics_array_timeout_s", 2.0)),
             epics_scalar_timeout_s=float(raw.get("epics_scalar_timeout_s", 0.25)),
+            raw_scan_on_value=str(raw.get("raw_scan_on_value", "1 second")),
+            raw_scan_off_value=str(raw.get("raw_scan_off_value", "Passive")),
             source_path=path,
         )
 
@@ -188,6 +192,8 @@ class AppConfig:
             "refresh_ms": self.refresh_ms,
             "epics_array_timeout_s": self.epics_array_timeout_s,
             "epics_scalar_timeout_s": self.epics_scalar_timeout_s,
+            "raw_scan_on_value": self.raw_scan_on_value,
+            "raw_scan_off_value": self.raw_scan_off_value,
             "pv_templates": self.pv_templates,
             "tune_pvs": [item.__dict__ for item in self.tune_pvs],
             "status_pvs": [item.__dict__ for item in self.status_pvs],
@@ -306,6 +312,16 @@ def read_button_phasors(backend: Backend, cfg: AppConfig, bpm: str, buttons: Ite
         raise RuntimeError("No buttons selected")
     n_min = min(v.size for v in out.values())
     return {k: v[:n_min] for k, v in out.items()}
+
+
+def tbt_scan_commands(cfg: AppConfig, names: Sequence[str], enabled: bool) -> List[Tuple[str, object]]:
+    value = cfg.raw_scan_on_value if enabled else cfg.raw_scan_off_value
+    commands: List[Tuple[str, object]] = []
+    for bpm in names:
+        commands.append((pv_for(cfg, bpm, "scan"), value))
+        if cfg.pv_templates.get("synth_scan"):
+            commands.append((pv_for(cfg, bpm, "synth_scan"), value))
+    return commands
 
 
 def combination_expression(data: Mapping[str, np.ndarray], expr: str) -> np.ndarray:
@@ -1138,19 +1154,20 @@ class BPMViewer:
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main, text="BPMs", font=("TkDefaultFont", 12, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(main, text="BPM overview", font=("TkDefaultFont", 12, "bold")).grid(row=0, column=0, sticky="w")
         self.search = tk.StringVar()
+        ttk.Label(main, text="Filter BPM name or section:").grid(row=1, column=0, sticky="w")
         search_entry = ttk.Entry(main, textvariable=self.search, width=28)
-        search_entry.grid(row=1, column=0, sticky="ew", pady=(2, 4))
+        search_entry.grid(row=2, column=0, sticky="ew", pady=(2, 4))
         search_entry.bind("<KeyRelease>", lambda _e: self.populate_bpms())
 
         self.listbox = tk.Listbox(main, selectmode=tk.EXTENDED, exportselection=False)
-        self.listbox.grid(row=2, column=0, rowspan=8, sticky="nsew")
+        self.listbox.grid(row=3, column=0, rowspan=8, sticky="nsew")
         self.listbox.bind("<Double-Button-1>", lambda _e: self.open_selected())
         self.populate_bpms()
 
         buttons = ttk.Frame(main)
-        buttons.grid(row=2, column=1, sticky="new", padx=(10, 0))
+        buttons.grid(row=3, column=1, sticky="new", padx=(10, 0))
         ttk.Button(buttons, text="Open selected plot", command=self.open_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Select all BPMs", command=self.select_all_bpms).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Select visible/filter", command=self.select_visible_bpms).pack(fill=tk.X, pady=2)
@@ -1159,38 +1176,39 @@ class BPMViewer:
         ttk.Button(buttons, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
-        ttk.Button(buttons, text="Enable selected BPM(s)…", command=self.enable_selected).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Enable ALL BPMs…", command=self.enable_all).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Start TBT selected…", command=self.start_tbt_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Stop TBT selected…", command=self.stop_tbt_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Check TBT status", command=self.check_tbt_status).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
-        ttk.Button(buttons, text="Show planned enable commands", command=self.preview_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Show planned TBT commands", command=self.preview_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Refresh status PVs", command=self.refresh_status_pvs).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Save config", command=self.save_config).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Help / guide", command=self.show_help).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Quit", command=root.destroy).pack(fill=tk.X, pady=2)
 
         pv_box = ttk.LabelFrame(main, text="Editable PV templates", padding=8)
-        pv_box.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        pv_box.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.pv_template_vars: Dict[str, tk.StringVar] = {}
-        for row, key in enumerate(("scan", "i", "q")):
+        for row, key in enumerate(("scan", "synth_scan", "i", "q")):
             ttk.Label(pv_box, text=key).grid(row=row, column=0, sticky="w")
             var = tk.StringVar(value=self.cfg.pv_templates.get(key, ""))
             self.pv_template_vars[key] = var
             ttk.Entry(pv_box, textvariable=var).grid(row=row, column=1, sticky="ew", padx=6, pady=1)
-        ttk.Button(pv_box, text="Apply templates", command=self.apply_pv_templates).grid(row=0, column=2, rowspan=3, sticky="ns")
+        ttk.Button(pv_box, text="Apply templates", command=self.apply_pv_templates).grid(row=0, column=2, rowspan=4, sticky="ns")
         pv_box.columnconfigure(1, weight=1)
 
         self.tune_frame = ttk.LabelFrame(main, text="Read-only tune PVs for spectrum markers", padding=8)
-        self.tune_frame.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.tune_frame.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.tune_rows: List[Tuple[TunePV, tk.StringVar, tk.Label, tk.BooleanVar, tk.StringVar]] = []
         self.build_tune_rows()
 
         self.status_pv_frame = ttk.LabelFrame(main, text="Read-only excitation / status PVs", padding=8)
-        self.status_pv_frame.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.status_pv_frame.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.status_pv_rows: List[Tuple[StatusPV, tk.StringVar, tk.Label, tk.BooleanVar, tk.StringVar]] = []
         self.build_status_pv_rows()
 
         info = ttk.LabelFrame(main, text="Combination examples", padding=8)
-        info.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        info.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         ttk.Label(
             info,
             justify=tk.LEFT,
@@ -1204,9 +1222,9 @@ class BPMViewer:
         ).pack(anchor="w")
 
         self.status = tk.StringVar(value=mode_label)
-        ttk.Label(main, textvariable=self.status).grid(row=14, column=0, columnspan=2, sticky="w", pady=8)
+        ttk.Label(main, textvariable=self.status).grid(row=15, column=0, columnspan=2, sticky="w", pady=8)
 
-        main.rowconfigure(2, weight=1)
+        main.rowconfigure(3, weight=1)
         main.columnconfigure(0, weight=1)
         self.status.set(f"{mode_label}. Optional tune/status PVs are not read on startup; click Refresh or open a spectrum.")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -1216,7 +1234,8 @@ class BPMViewer:
         self.listbox.delete(0, tk.END)
         self.displayed_bpm_names = []
         for bpm in self.cfg.bpms:
-            if not q or q in bpm.name.lower():
+            haystack = f"{bpm.name} {bpm.section}".lower()
+            if not q or q in haystack:
                 marker = "*" if bpm.known_orbit_pvs else " "
                 orbit = " orbit-ok" if bpm.known_orbit_pvs else ""
                 display = f"{marker} {bpm.name:<10} {bpm.section:<3}{orbit}"
@@ -1285,7 +1304,7 @@ class BPMViewer:
             return
         try:
             test_bpm = self.cfg.bpms[0].name if self.cfg.bpms else "BPM"
-            for key in ("scan", "i", "q"):
+            for key in ("scan", "synth_scan", "i", "q"):
                 candidate[key].format(bpm=test_bpm, button="a", BUTTON="A")
         except Exception as exc:
             messagebox.showerror("PV template error", f"Template formatting failed: {exc}", parent=self.root)
@@ -1464,14 +1483,16 @@ class BPMViewer:
             self.root.after_cancel(self.status_after_id)
         self.root.destroy()
 
-    def enable_commands(self, names: Sequence[str]) -> List[Tuple[str, object]]:
-        return [(pv_for(self.cfg, bpm, "scan"), "I/O Intr") for bpm in names]
+    def tbt_commands(self, names: Sequence[str], enabled: bool) -> List[Tuple[str, object]]:
+        return tbt_scan_commands(self.cfg, names, enabled)
+
+    def selected_or_all_names(self) -> List[str]:
+        names = self.selected_names()
+        return names or [b.name for b in self.cfg.bpms]
 
     def preview_selected(self) -> None:
-        names = self.selected_names()
-        if not names:
-            names = [b.name for b in self.cfg.bpms]
-        commands = self.enable_commands(names)
+        names = self.selected_or_all_names()
+        commands = self.tbt_commands(names, enabled=True)
         self.session.event("preview_enable_commands", commands=[{"pv": pv, "value": value} for pv, value in commands])
         text = "\n".join(f"caput {pv!r} {value!r}" for pv, value in commands)
         win = tk.Toplevel(self.root)
@@ -1481,17 +1502,45 @@ class BPMViewer:
         box.insert("1.0", text)
         box.configure(state=tk.DISABLED)
 
-    def enable_selected(self) -> None:
+    def start_tbt_selected(self) -> None:
         names = self.selected_names()
         if not names:
             messagebox.showinfo("Select BPM", "Select one or more BPMs first.", parent=self.root)
             return
-        self.confirm_and_write(self.enable_commands(names))
+        self.confirm_and_write(self.tbt_commands(names, enabled=True), action="start TBT raw logging")
 
-    def enable_all(self) -> None:
-        self.confirm_and_write(self.enable_commands([b.name for b in self.cfg.bpms]))
+    def stop_tbt_selected(self) -> None:
+        names = self.selected_names()
+        if not names:
+            messagebox.showinfo("Select BPM", "Select one or more BPMs first.", parent=self.root)
+            return
+        self.confirm_and_write(self.tbt_commands(names, enabled=False), action="stop TBT raw logging")
 
-    def confirm_and_write(self, commands: Sequence[Tuple[str, object]]) -> None:
+    def check_tbt_status(self) -> None:
+        names = self.selected_or_all_names()
+        lines: List[str] = []
+        self.sync_runtime_config()
+        for bpm in names:
+            for key in ("scan", "synth_scan"):
+                if key not in self.cfg.pv_templates:
+                    continue
+                pv = pv_for(self.cfg, bpm, key)
+                try:
+                    value = self.backend.get_value(pv)
+                    lines.append(f"{pv}: {value}")
+                    self.session.event("tbt_status_read", bpm=bpm, pv=pv, value=str(value))
+                except Exception as exc:
+                    lines.append(f"{pv}: ERROR {exc}")
+                    self.session.event("tbt_status_error", bpm=bpm, pv=pv, error=str(exc))
+        win = tk.Toplevel(self.root)
+        win.title("TBT raw logging status")
+        box = tk.Text(win, width=110, height=min(34, max(8, len(lines) + 2)))
+        box.pack(fill=tk.BOTH, expand=True)
+        box.insert("1.0", "\n".join(lines))
+        box.configure(state=tk.DISABLED)
+        self.status.set(f"Checked TBT status for {len(names)} BPM(s).")
+
+    def confirm_and_write(self, commands: Sequence[Tuple[str, object]], action: str = "write") -> None:
         preview = "\n".join(f"{pv} <- {value!r}" for pv, value in commands[:12])
         if len(commands) > 12:
             preview += f"\n… and {len(commands)-12} more"
@@ -1501,7 +1550,7 @@ class BPMViewer:
             return
         ok = messagebox.askyesno(
             "Confirm EPICS writes",
-            "This will write to the machine. Review the exact commands:\n\n" + preview + "\n\nProceed?",
+            f"This will {action} on the machine. Review the exact commands:\n\n" + preview + "\n\nProceed?",
             icon="warning",
             parent=self.root,
         )
@@ -1522,7 +1571,7 @@ class BPMViewer:
             messagebox.showerror("Some writes failed", "\n".join(errors[:20]), parent=self.root)
             self.status.set(f"Completed with {len(errors)} error(s)")
         else:
-            self.status.set(f"Enabled {len(commands)} BPM record(s)")
+            self.status.set(f"Completed {len(commands)} EPICS write(s)")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

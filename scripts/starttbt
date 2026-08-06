@@ -1,0 +1,3 @@
+#!/bin/sh
+./caput_many signals:ddc_raw.SCAN "1 second"
+./caput_many signals:ddc_synth.SCAN "1 second"

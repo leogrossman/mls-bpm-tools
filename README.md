@@ -1,12 +1,30 @@
 # MLS BPM I/Q Viewer
 
-Prototype playground for reading MLS BPM raw DDC I/Q arrays as four complex button signals `A`, `B`, `C`, and `D`, turn by turn.
+Control-room safe viewer for MLS BPM turn-by-turn raw DDC data. It reads each BPM as four complex button signals `A`, `B`, `C`, and `D`, then lets you inspect raw traces, phase/amplitude, spectra, tune markers, and BPM overlays.
 
-This is not operator-certified yet. It is meant for careful read-only exploration first.
+The first workflow is read-only and safe by default. Write-capable TBT start/stop buttons exist only behind explicit `--live --allow-writes` confirmation.
+
+## What To Do First
+
+1. Pull the newest version in the control-room checkout:
+
+```bash
+git pull
+```
+
+2. Start the GUI safely:
+
+```bash
+python3 bpm_iq_viewer.py --safe
+```
+
+3. The app opens a raw A/B/C/D plot for known BPMs. If it is blank, click `Check TBT status`; if the selected BPMs are `Passive`, ask whether it is OK to start TBT logging.
+4. To inspect spectra, switch the plot mode to `phase debug` first. This shows `angle`, `unwrap`, `detrend/window`, and PSD separately.
+5. If PV names are wrong, use `PV probe / edit IDs`, edit the ID, then `Save config`.
 
 ## Control-Room Start
 
-Use this one command first:
+Use this command for normal exploration:
 
 ```bash
 python3 bpm_iq_viewer.py --safe
@@ -17,6 +35,7 @@ python3 bpm_iq_viewer.py --safe
 - live EPICS reads are allowed
 - machine writes are blocked
 - known BPMs are preselected and an initial raw-button plot opens automatically
+- the Start/Stop TBT buttons only preview/block writes
 - optional tune/noise/status PVs are not read during GUI startup
 - missing/broken PVs should not crash the GUI
 - scalar tune/noise/status PVs use a short timeout so bad candidates fail fast
@@ -29,6 +48,15 @@ python3 bpm_iq_viewer.py --live --allow-writes
 ```
 
 Even in write-capable mode, the GUI shows the exact PV/value list and asks for confirmation before writing.
+
+The TBT start/stop buttons use the same meaning as the old control-room scripts:
+
+```text
+start: {bpm}:signals:ddc_raw.SCAN   <- "1 second"
+start: {bpm}:signals:ddc_synth.SCAN <- "1 second"
+stop:  {bpm}:signals:ddc_raw.SCAN   <- "Passive"
+stop:  {bpm}:signals:ddc_synth.SCAN <- "Passive"
+```
 
 ## Local Demo
 
@@ -48,6 +76,8 @@ python3 bpm_iq_viewer.py --demo
 
 - `bpm_iq_viewer.py`: Tkinter/Matplotlib GUI and command-line entry point.
 - `bpm_config.json`: BPM list, PV templates, sample rate, lattice positions, tune PVs, status PVs.
+- `scripts/starttbt`, `scripts/stoptbt`: copies of the old control-room TBT start/stop scripts.
+- `tests/fixtures/control_room_BPMZ1L2RP_sum_2048.npz`: compact real raw snapshot used by regression tests.
 - `requirements.txt`: Python dependencies.
 - `test_bpm_iq_viewer.py`: offline unit tests.
 - `README_BPM_IQ_VIEWER.md`: older detailed prototype notes; this `README.md` is the current entry point.
@@ -117,6 +147,7 @@ The default raw BPM templates in `bpm_config.json` are:
 
 ```text
 scan: {bpm}:signals:ddc_raw.SCAN
+synth_scan: {bpm}:signals:ddc_synth.SCAN
 i:    {bpm}:signals:ddc_raw.I{button}
 q:    {bpm}:signals:ddc_raw.Q{button}
 ```
@@ -134,11 +165,13 @@ BPMZ1L2RP:signals:ddc_raw.Id
 BPMZ1L2RP:signals:ddc_raw.Qd
 ```
 
-The currently planned enable PV is:
+The raw logging control PVs are:
 
 ```text
-PV:    {bpm}:signals:ddc_raw.SCAN
-value: I/O Intr
+PV:       {bpm}:signals:ddc_raw.SCAN
+PV:       {bpm}:signals:ddc_synth.SCAN
+start:    1 second
+stop:     Passive
 ```
 
 This follows the old MATLAB pattern:
@@ -151,9 +184,8 @@ pspectrum(detrend(unwrap(angle(iq))), 6250e3, 'FrequencyResolution', 1000)
 
 Before any write-capable run, verify:
 
-- whether `I/O Intr` is the exact enum string accepted by Python `pyepics`
-- whether the machine needs an enum index instead
-- whether changing `.SCAN` is required at all
+- whether `1 second` and `Passive` are still the intended enum strings
+- whether both `ddc_raw` and `ddc_synth` should be changed for the current study
 - whether live reads can happen without changing `.SCAN`
 
 The GUI has editable PV template fields, so if the capitalization or namespace is wrong you can test another template at runtime. Commit confirmed names back to `bpm_config.json`.
@@ -166,6 +198,8 @@ The BPM list and positions were copied from the local `betagui` low-emittance la
 ```
 
 The raw I/Q PV namespace is still template-based and must be verified on the control-room machine.
+
+The current implementation uses `pyepics` Channel Access. If the BPM EPICS7/PVA waveform endpoints become available with richer structured data, the next clean step is a second backend next to `EpicsBackend`, not rewriting the analysis. The tested core expects complex arrays after readout, so CA and PVA can share the same plotting/spectrum pipeline.
 
 ## Status PVs
 

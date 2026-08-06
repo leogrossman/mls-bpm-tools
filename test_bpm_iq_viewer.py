@@ -17,6 +17,7 @@ from bpm_iq_viewer import (
     read_button_phasors,
     spectrum,
     spectrum_pipeline,
+    tbt_scan_commands,
     tune_markers_from_values,
     tune_value_to_frequency,
 )
@@ -94,6 +95,9 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertGreaterEqual(len(cfg.bpms), 28)
         self.assertTrue(any(bpm.name == "BPMZ1L2RP" and bpm.x_pv == "BPMZ1L2RP:rdX" for bpm in cfg.bpms))
         self.assertTrue(any(bpm.name == "BPMZ3L2RP" and bpm.known_orbit_pvs for bpm in cfg.bpms))
+        self.assertEqual(cfg.pv_templates["synth_scan"], "{bpm}:signals:ddc_synth.SCAN")
+        self.assertEqual(cfg.raw_scan_on_value, "1 second")
+        self.assertEqual(cfg.raw_scan_off_value, "Passive")
         self.assertEqual([item.pv for item in cfg.tune_pvs], ["TUNEZRP:measX", "TUNEZRP:measY", "TUNEZRP:measZ"])
         self.assertFalse(next(item for item in cfg.status_pvs if item.pv == "BBQRP:X:DRIVEO").enabled)
         self.assertTrue(next(item for item in cfg.status_pvs if item.pv == "WFGEN2C1CP:stOut").enabled)
@@ -115,6 +119,27 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(reloaded.status_pvs[0].pv, "TEST:EDITED")
         self.assertFalse(reloaded.status_pvs[0].enabled)
         self.assertTrue(reloaded.bpms[0].known_orbit_pvs)
+
+    def test_tbt_scan_commands_match_control_room_scripts(self):
+        cfg = AppConfig.load(Path(__file__).with_name("bpm_config.json"))
+
+        on = tbt_scan_commands(cfg, ["BPMZ1L2RP"], enabled=True)
+        off = tbt_scan_commands(cfg, ["BPMZ1L2RP"], enabled=False)
+
+        self.assertEqual(
+            on,
+            [
+                ("BPMZ1L2RP:signals:ddc_raw.SCAN", "1 second"),
+                ("BPMZ1L2RP:signals:ddc_synth.SCAN", "1 second"),
+            ],
+        )
+        self.assertEqual(
+            off,
+            [
+                ("BPMZ1L2RP:signals:ddc_raw.SCAN", "Passive"),
+                ("BPMZ1L2RP:signals:ddc_synth.SCAN", "Passive"),
+            ],
+        )
 
     def test_spectrum_peak_near_known_signal(self):
         fs = 1000.0
@@ -167,6 +192,25 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(len(spec["frequency_hz"]), 33)
         np.testing.assert_allclose(spec["window"], np.ones(16))
         np.testing.assert_allclose(spec["windowed"], x)
+
+    def test_control_room_snapshot_phase_spectrum_regression(self):
+        fixture = Path(__file__).parent / "tests" / "fixtures" / "control_room_BPMZ1L2RP_sum_2048.npz"
+        data = np.load(fixture)
+        settings = SpectrumSettings(
+            unwrap_phase=True,
+            detrend="linear",
+            window="hann",
+            frequency_resolution_hz=500.0,
+        )
+
+        phase = phase_pipeline(data["combined"], settings)["phase"]
+        spec = spectrum_pipeline(phase, 6250e3, settings)
+        power = spec["psd"].copy()
+        power[0] = 0.0
+        peak = spec["frequency_hz"][np.argmax(power)]
+
+        self.assertAlmostEqual(peak, 13500.0, delta=500.0)
+        self.assertLess(np.max(np.abs(np.diff(np.angle(data["combined"])))), np.pi)
 
     def test_tune_value_conversion_and_harmonic_markers(self):
         freq, tune = tune_value_to_frequency(0.2, 1000.0, "auto")
