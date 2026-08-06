@@ -11,9 +11,11 @@ This file tracks requested control-room BPM viewer work so implementation status
 - BPM list can filter by BPM name or section, select all, select visible/filter, select known, and clear.
 - Plot windows can add/remove/toggle BPM overlays.
 - Plot windows have signal-combination checkboxes; standard default is `A+B+C+D` and `A`.
+- Plot windows combine raw phase/magnitude traces with their spectra in the common phase, magnitude, and all views.
 - Optional custom expression still exists for advanced combinations.
 - Legend can be toggled off.
 - Tune and harmonic markers can be toggled; invalid tune PV values are reported but not drawn.
+- Spectrum frequency axes can be shown as kHz, Hz, or fractional tune.
 - Plot windows list detected spectrum peaks and tune marker status in a side pane.
 - Spectrum overlays can be normalized and visually stacked so multiple BPMs/signals stay visible.
 - Phase debug plot shows wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.

@@ -17,7 +17,7 @@ The main window is a BPM picker:
 
 ## First Plot To Trust
 
-The normal first plot is `all`. It opens I, Q, unwrapped phase, and the phase spectrum for:
+The normal first plot is `all`. It opens raw magnitude, unwrapped phase, phase spectrum, and magnitude spectrum for:
 
 1. `A+B+C+D`
 2. `A`
@@ -37,6 +37,15 @@ The default signals are:
 - `A`
 
 Use the `Signals to plot` panel to add B/C/D, difference candidates, mean, or a custom expression. `Normalize spectra` and `Stack spectra` are on by default so overlaid spectra stay visible instead of covering each other.
+
+Use the plot selector for focused views:
+
+- `phase`: unwrapped phase plus phase spectrum.
+- `magnitude`: raw magnitude plus magnitude spectrum.
+- `spectra`: phase and magnitude spectra only.
+- `phase debug`: wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.
+
+Use `Freq` to switch spectrum x axes and tune/peak listings between `kHz`, `Hz`, and fractional tune `Q=f/f_rev`.
 
 ## Tunes And Peaks
 

@@ -55,12 +55,15 @@ Raw snapshots are bounded and intended for regression/debugging, not long-term a
 
 ## Plot Window Controls
 
-- `all`: default view; shows I, Q, unwrapped phase, and phase spectrum.
+- `all`: default view; shows raw magnitude, unwrapped phase, phase spectrum, and magnitude spectrum.
+- `phase`: shows unwrapped phase plus phase spectrum.
+- `magnitude`: shows raw magnitude plus magnitude spectrum.
 - `spectra`: shows phase spectrum and magnitude spectrum together.
 - `phase debug`: shows wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.
+- `Freq`: displays spectra, tune markers, and peak listings as `kHz`, `Hz`, or fractional tune `Q=f/f_rev`.
 - `Normalize spectra`: scales each plotted spectrum to its own maximum.
 - `Stack spectra`: applies a small visual offset so overlaid spectra do not hide each other.
-- `Tunes` / `Harmonics`: reads configured tune PVs and draws only valid in-range markers.
+- `Tunes` / `Harmonics`: reads configured tune PVs and draws only valid in-range markers. Auto tune units treat values `0..1` as tune fraction, values `1..1000` as kHz, and larger values as Hz.
 - `Tune status / spectrum peaks`: lists tune PV status plus automatically detected spectrum peaks.
 
 ## Code Layout

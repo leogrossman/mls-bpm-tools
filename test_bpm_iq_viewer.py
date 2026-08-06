@@ -264,6 +264,10 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(freq, 200.0)
         self.assertEqual(tune, 0.2)
 
+        freq, tune = tune_value_to_frequency(13.5, 6250e3, "auto")
+        self.assertEqual(freq, 13_500.0)
+        self.assertAlmostEqual(tune, 13_500.0 / 6250e3)
+
         markers = tune_markers_from_values(
             {"Qx": {"value": 0.2, "unit": "auto", "color": "blue", "harmonics": 3}},
             fs=1000.0,

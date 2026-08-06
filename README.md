@@ -36,9 +36,9 @@ python3 bpm_iq_viewer.py --demo
 - `python3 bpm_iq_viewer.py` uses live EPICS reads and blocks all writes.
 - TBT start/stop buttons only write in `--live --allow-writes`, after a confirmation dialog.
 - Optional tune/noise/status PVs are not read on startup.
-- Plot windows default to the `all` view with `A+B+C+D` first, then `A`.
+- Plot windows default to the `all` view with `A+B+C+D` first, then `A`; this shows raw magnitude, phase, phase spectrum, and magnitude spectrum.
 - Spectrum traces are normalized and visually stacked by default so multiple BPMs/signals can be compared without one trace hiding the rest.
-- The plot side pane lists tune PV status, valid tune/harmonic markers, and automatically detected spectrum peaks.
+- The plot side pane lists tune PV status, valid tune/harmonic markers, and automatically detected spectrum peaks in the selected frequency units.
 - Recent raw BPM reads are cached briefly inside each plot window to avoid repeated EPICS reads during UI-only redraws.
 
 ## Tests

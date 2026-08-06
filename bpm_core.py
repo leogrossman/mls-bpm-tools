@@ -377,7 +377,7 @@ def tune_value_to_frequency(value: object, fs: float, unit: str = "auto") -> Opt
     if unit == "tune" or (unit == "auto" and numeric <= 1.0):
         tune = numeric
         freq = numeric * fs
-    elif unit == "khz":
+    elif unit == "khz" or (unit == "auto" and numeric <= 1000.0):
         freq = numeric * 1000.0
         tune = freq / fs
     else:
