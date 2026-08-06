@@ -66,6 +66,21 @@ Raw snapshots are bounded and intended for regression/debugging, not long-term a
 - `Stack spectra`: applies a small visual offset so overlaid spectra do not hide each other.
 - `Tunes` / `Harmonics`: reads configured tune PVs and draws only valid in-range markers. Auto tune units treat values `0..1` as tune fraction, values `1..1000` as kHz, and larger values as Hz.
 - `Tune status / spectrum peaks`: lists tune PV status plus automatically detected spectrum peaks.
+- `max time points`: display-only decimation for raw time traces. Spectra still use the full waveform block.
+
+## FFT And Phase Settings
+
+FFT settings apply to the whole plot window, not to each BPM separately. That is intentional: if Sum, A, and two BPMs are overlaid, the spectra should use the same detrending, window, NFFT, and frequency axis so peak heights and widths are comparable.
+
+- `unwrap(angle)`: use continuous phase before detrending and FFT. This matches the old MATLAB workflow `unwrap(angle(iq))`.
+- `unwrap jump rad`: phase jump threshold. `pi` is the normal choice unless the raw phase is exceptionally noisy.
+- `detrend`: `linear` removes a slope and DC offset before the FFT. This is usually best for turn-by-turn phase because slow drift otherwise leaks into low-frequency bins.
+- `window`: `hann` is the default compromise for live spectra. `rectangular` preserves amplitude for exactly bin-centered tones but leaks more for off-bin lines.
+- `NFFT`: leave empty for automatic FFT length from `df Hz`; set manually only when testing a specific binning.
+- `df Hz`: desired frequency-bin spacing. Smaller values give finer bins but increase FFT work and can make the plot slower. `500 Hz` is a good starting point for the 6.25 MHz sample rate.
+- `max time points`: reduces only the number of raw points drawn. It does not change the FFT or peak-finding data.
+
+Change FFT settings per plot window when comparing different analysis assumptions. Keep them identical inside one plot window when comparing BPMs or Sum versus A.
 
 ## Data Rate And Performance
 

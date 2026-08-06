@@ -225,6 +225,12 @@ def human_bytes(value: float) -> str:
         amount /= 1024.0
 
 
+def decimation_stride(n_samples: int, max_points: int) -> int:
+    if max_points <= 0:
+        return 1
+    return max(1, int(math.ceil(max(int(n_samples), 1) / max_points)))
+
+
 def tbt_scan_commands(cfg: AppConfig, names: Sequence[str], enabled: bool) -> List[Tuple[str, object]]:
     value = cfg.raw_scan_on_value if enabled else cfg.raw_scan_off_value
     commands: List[Tuple[str, object]] = []

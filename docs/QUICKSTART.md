@@ -49,6 +49,8 @@ Use `Freq` to switch spectrum x axes and tune/peak listings between `kHz`, `Hz`,
 
 Use `Refresh s` to control live update speed. The default is 3 seconds. Watch the `Load:` line in the plot window or the global `Performance:` line in the main window; if it says `LAGGING`, increase the interval, reduce active BPM overlays, or disable signals you do not need.
 
+If the window is short, use the left-pane tabs: `BPMs`, `Signals`, `Analysis`, and `FFT / perf`. The BPM overlay list scrolls independently.
+
 ## Tunes And Peaks
 
 In a plot window, enable `Tunes` to read the configured tune PVs. Bad or out-of-range values are shown as errors in the side pane and are not drawn as plot markers. Enable `Harmonics` to draw valid harmonic markers.

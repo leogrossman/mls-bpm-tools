@@ -94,6 +94,7 @@ from bpm_core import (
     TunePV,
     combine_selected_expressions,
     combination_expression,
+    decimation_stride,
     estimate_iq_payload,
     find_spectrum_peaks,
     human_bytes,
@@ -233,9 +234,21 @@ class PlotWindow(tk.Toplevel):
         body = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True)
 
-        side = ttk.Frame(body, padding=6)
+        side = ttk.Frame(body, padding=4)
         body.add(side, weight=0)
-        bpm_box = ttk.LabelFrame(side, text="BPM overlays", padding=6)
+        side_tabs = ttk.Notebook(side)
+        side_tabs.pack(fill=tk.BOTH, expand=True)
+
+        bpm_tab = ttk.Frame(side_tabs, padding=6)
+        signals_tab = ttk.Frame(side_tabs, padding=6)
+        analysis_tab = ttk.Frame(side_tabs, padding=6)
+        fft_tab = ttk.Frame(side_tabs, padding=6)
+        side_tabs.add(bpm_tab, text="BPMs")
+        side_tabs.add(signals_tab, text="Signals")
+        side_tabs.add(analysis_tab, text="Analysis")
+        side_tabs.add(fft_tab, text="FFT / perf")
+
+        bpm_box = ttk.LabelFrame(bpm_tab, text="BPM overlays", padding=6)
         bpm_box.pack(fill=tk.BOTH, expand=True)
         add_row = ttk.Frame(bpm_box)
         add_row.pack(fill=tk.X, pady=(0, 4))
@@ -255,11 +268,20 @@ class PlotWindow(tk.Toplevel):
         ttk.Button(toggle_row, text="All off", command=lambda: self.set_all_bpms(False)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
         ttk.Button(bpm_box, text="Remove off", command=self.remove_disabled_bpms).pack(fill=tk.X, pady=2)
         ttk.Separator(bpm_box).pack(fill=tk.X, pady=4)
-        self.bpm_rows = ttk.Frame(bpm_box)
-        self.bpm_rows.pack(fill=tk.BOTH, expand=True)
+        bpm_scroll = ttk.Frame(bpm_box)
+        bpm_scroll.pack(fill=tk.BOTH, expand=True)
+        self.bpm_rows_canvas = tk.Canvas(bpm_scroll, height=260, highlightthickness=0)
+        bpm_scrollbar = ttk.Scrollbar(bpm_scroll, orient=tk.VERTICAL, command=self.bpm_rows_canvas.yview)
+        self.bpm_rows = ttk.Frame(self.bpm_rows_canvas)
+        self.bpm_rows_window = self.bpm_rows_canvas.create_window((0, 0), window=self.bpm_rows, anchor="nw")
+        self.bpm_rows_canvas.configure(yscrollcommand=bpm_scrollbar.set)
+        self.bpm_rows_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        bpm_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.bpm_rows.bind("<Configure>", lambda _e: self.bpm_rows_canvas.configure(scrollregion=self.bpm_rows_canvas.bbox("all")))
+        self.bpm_rows_canvas.bind("<Configure>", lambda e: self.bpm_rows_canvas.itemconfigure(self.bpm_rows_window, width=e.width))
 
-        combo_box = ttk.LabelFrame(side, text="Signals to plot", padding=6)
-        combo_box.pack(fill=tk.X, pady=(8, 0))
+        combo_box = ttk.LabelFrame(signals_tab, text="Signals to plot", padding=6)
+        combo_box.pack(fill=tk.X)
         requested_expressions = set(parse_expressions(expression))
         self.preset_expression_vars: Dict[str, tk.BooleanVar] = {}
         for label, expr in COMBINATION_PRESETS:
@@ -273,8 +295,8 @@ class PlotWindow(tk.Toplevel):
         ttk.Entry(combo_box, textvariable=self.expr, width=26).pack(fill=tk.X, pady=(2, 0))
         ttk.Button(combo_box, text="Apply signals", command=self.refresh).pack(fill=tk.X, pady=(4, 0))
 
-        tune_box = ttk.LabelFrame(side, text="Spectrum markers", padding=6)
-        tune_box.pack(fill=tk.X, pady=(8, 0))
+        tune_box = ttk.LabelFrame(analysis_tab, text="Spectrum markers", padding=6)
+        tune_box.pack(fill=tk.X)
         ttk.Label(
             tune_box,
             text="Tunes are read only when the Tunes toggle is on or you click Refresh now.",
@@ -282,13 +304,13 @@ class PlotWindow(tk.Toplevel):
             justify=tk.LEFT,
         ).pack(anchor="w")
 
-        analysis_box = ttk.LabelFrame(side, text="Tune status / spectrum peaks", padding=6)
+        analysis_box = ttk.LabelFrame(analysis_tab, text="Tune status / spectrum peaks", padding=6)
         analysis_box.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         self.analysis_text = tk.Text(analysis_box, height=12, width=30, wrap="none")
         self.analysis_text.pack(fill=tk.BOTH, expand=True)
 
-        fft_box = ttk.LabelFrame(side, text="FFT / phase settings", padding=6)
-        fft_box.pack(fill=tk.X, pady=(8, 0))
+        fft_box = ttk.LabelFrame(fft_tab, text="FFT / phase settings", padding=6)
+        fft_box.pack(fill=tk.X)
         self.unwrap_phase = tk.BooleanVar(value=True)
         ttk.Checkbutton(fft_box, text="unwrap(angle)", variable=self.unwrap_phase, command=self.refresh).grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(fft_box, text="unwrap jump rad").grid(row=1, column=0, sticky="w")
@@ -306,10 +328,26 @@ class PlotWindow(tk.Toplevel):
         ttk.Label(fft_box, text="df Hz").grid(row=5, column=0, sticky="w")
         self.freq_res_text = tk.StringVar(value="500")
         ttk.Entry(fft_box, textvariable=self.freq_res_text, width=10).grid(row=5, column=1, sticky="ew")
+        ttk.Label(fft_box, text="max time points").grid(row=6, column=0, sticky="w")
+        self.max_time_points_text = tk.StringVar(value="2500")
+        ttk.Entry(fft_box, textvariable=self.max_time_points_text, width=10).grid(row=6, column=1, sticky="ew")
         self.log_raw_snapshots = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fft_box, text="log first raw snapshot", variable=self.log_raw_snapshots).grid(row=6, column=0, columnspan=2, sticky="w")
-        ttk.Button(fft_box, text="Apply + refresh", command=self.refresh).grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        ttk.Checkbutton(fft_box, text="log first raw snapshot", variable=self.log_raw_snapshots).grid(row=7, column=0, columnspan=2, sticky="w")
+        ttk.Button(fft_box, text="Apply + refresh", command=self.refresh).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         fft_box.columnconfigure(1, weight=1)
+
+        perf_box = ttk.LabelFrame(fft_tab, text="Performance notes", padding=6)
+        perf_box.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        ttk.Label(
+            perf_box,
+            text=(
+                "FFT and spectra use the full waveform block. "
+                "Max time points only reduces how many raw time-domain points Matplotlib draws. "
+                "Increase Refresh s or reduce active BPMs/signals if the Load line says LAGGING."
+            ),
+            wraplength=230,
+            justify=tk.LEFT,
+        ).pack(anchor="w")
 
         plot_frame = ttk.Frame(body)
         body.add(plot_frame, weight=1)
@@ -321,6 +359,10 @@ class PlotWindow(tk.Toplevel):
         self.last_errors: Dict[str, str] = {}
         self.logged_raw_snapshots: set = set()
         self.phasor_cache: Dict[Tuple[str, Tuple[str, ...]], Tuple[float, Dict[str, np.ndarray]]] = {}
+        self._refresh_phasor_stamps: Dict[Tuple[str, Tuple[str, ...]], float] = {}
+        self.analysis_cache: Dict[Tuple[object, ...], Dict[str, object]] = {}
+        self.analysis_cache_order: List[Tuple[object, ...]] = []
+        self._refresh_analysis_hits = 0
         self.last_perf_log_s = 0.0
         self.update_cache_ttl()
         for bpm in self.bpm_names:
@@ -500,6 +542,27 @@ class PlotWindow(tk.Toplevel):
             frequency_resolution_hz=freq_res,
         )
 
+    def max_time_points(self) -> int:
+        try:
+            value = int(self.max_time_points_text.get())
+        except ValueError:
+            value = 2500
+        return min(max(value, 200), 200_000)
+
+    def decimated_xy(self, x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        stride = decimation_stride(min(x.size, y.size), self.max_time_points())
+        return x[::stride], y[::stride]
+
+    def settings_key(self, settings: SpectrumSettings) -> Tuple[object, ...]:
+        return (
+            settings.unwrap_phase,
+            round(settings.unwrap_discont_rad, 12),
+            settings.detrend,
+            settings.window,
+            settings.nfft,
+            settings.frequency_resolution_hz,
+        )
+
     def log_raw_snapshot_once(self, bpm: str, expr: str, phasors: Mapping[str, np.ndarray], z: np.ndarray) -> None:
         if not self.log_raw_snapshots.get():
             return
@@ -551,11 +614,62 @@ class PlotWindow(tk.Toplevel):
         now = time.monotonic()
         if cached and not force_read and now - cached[0] <= self.cache_ttl_s:
             self._refresh_cache_hits += 1
+            self._refresh_phasor_stamps[key] = cached[0]
             return cached[1]
         phasors = read_button_phasors(self.app.backend, self.app.cfg, bpm, buttons_needed)
         self._refresh_array_pvs_read += len(buttons_needed) * 2
         self.phasor_cache[key] = (now, phasors)
+        self._refresh_phasor_stamps[key] = now
         return phasors
+
+    def _analysis_for(
+        self,
+        bpm: str,
+        expr: str,
+        buttons_key: Tuple[str, ...],
+        phasors: Mapping[str, np.ndarray],
+        settings: SpectrumSettings,
+        needs_phase: bool,
+        needs_magnitude: bool,
+        phase_spectrum: bool,
+        magnitude_spectrum: bool,
+    ) -> Dict[str, object]:
+        stamp = self._refresh_phasor_stamps.get((bpm, buttons_key), 0.0)
+        key = (
+            bpm,
+            expr,
+            buttons_key,
+            stamp,
+            self.settings_key(settings),
+            needs_phase,
+            needs_magnitude,
+            phase_spectrum,
+            magnitude_spectrum,
+        )
+        cached = self.analysis_cache.get(key)
+        if cached is not None:
+            self._refresh_analysis_hits += 1
+            return cached
+        z = combination_expression(phasors, expr)
+        result: Dict[str, object] = {"z": z}
+        if needs_phase or phase_spectrum:
+            phase_steps = phase_pipeline(z, settings)
+            phase = phase_steps["phase"]
+            result["phase_steps"] = phase_steps
+            result["phase"] = phase
+            if phase_spectrum:
+                result["phase_spec"] = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+        if needs_magnitude or magnitude_spectrum:
+            mag = np.abs(z)
+            result["mag"] = mag
+            if magnitude_spectrum:
+                result["mag_spec"] = spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
+        self.analysis_cache[key] = result
+        self.analysis_cache_order.append(key)
+        while len(self.analysis_cache_order) > 48:
+            old_key = self.analysis_cache_order.pop(0)
+            self.analysis_cache.pop(old_key, None)
+        return result
 
     def _refresh_impl(self, force_read: bool = False) -> None:
         refresh_started = time.perf_counter()
@@ -585,16 +699,20 @@ class PlotWindow(tk.Toplevel):
         needs_phase = kind in ("phase", "all", "spectra", "phase debug")
         needs_magnitude = kind in ("magnitude", "all", "spectra")
         needs_spectrum = kind in ("phase", "magnitude", "all", "spectra", "phase debug")
+        needs_phase_spectrum = kind in ("phase", "all", "spectra", "phase debug")
+        needs_magnitude_spectrum = kind in ("magnitude", "all", "spectra")
         settings = self.spectrum_settings() if needs_spectrum else SpectrumSettings()
         self.last_data = {}
         self.last_errors = {}
         self._refresh_array_pvs_read = 0
         self._refresh_cache_hits = 0
+        self._refresh_analysis_hits = 0
         peak_records: List[Tuple[str, str, float, float]] = []
         trace_index = 0
         payload_complex_samples = 0
         payload_bytes = 0
         array_pvs_planned = len(active_bpms) * len(buttons_to_plot) * 2
+        buttons_key = tuple(buttons_needed)
         tune_markers = self.app.current_tune_markers(include_harmonics=self.show_harmonics.get()) if self.show_tunes.get() else []
         if not active_bpms:
             axes[0].text(
@@ -625,20 +743,27 @@ class PlotWindow(tk.Toplevel):
             payload_bytes += sum(int(value.nbytes) for value in phasors.values())
             for expr in expressions:
                 try:
-                    z = combination_expression(phasors, expr)
+                    analysis = self._analysis_for(
+                        bpm,
+                        expr,
+                        buttons_key,
+                        phasors,
+                        settings,
+                        needs_phase,
+                        needs_magnitude,
+                        needs_phase_spectrum,
+                        needs_magnitude_spectrum,
+                    )
+                    z = analysis["z"]
                 except Exception as exc:
                     message = str(exc)
                     self.last_errors[f"{bpm} {expr}"] = message
                     self.app.session.event("expression_error", bpm=bpm, expression=expr, error=message)
                     continue
-                phase_steps: Optional[Dict[str, np.ndarray]] = None
-                phase: Optional[np.ndarray] = None
-                mag: Optional[np.ndarray] = None
-                if needs_phase:
-                    phase_steps = phase_pipeline(z, settings)
-                    phase = phase_steps["phase"]
-                if needs_magnitude:
-                    mag = np.abs(z)
+                z = np.asarray(z)
+                phase_steps = analysis.get("phase_steps")
+                phase = analysis.get("phase")
+                mag = analysis.get("mag")
                 label = bpm if len(expressions) == 1 else f"{bpm} {expr}"
                 display_label = self._display_label(label, trace_index)
                 self.last_data[bpm][f"combined_{expr}"] = z
@@ -649,23 +774,28 @@ class PlotWindow(tk.Toplevel):
                     self.last_data[bpm][f"magnitude_{expr}"] = mag
                 self.log_raw_snapshot_once(bpm, expr, phasors, z)
                 turns = np.arange(z.size)
+                plot_turns, plot_z_real = self.decimated_xy(turns, z.real)
 
                 if kind == "I/Q":
-                    axes[0].plot(z.real, z.imag, ".-", ms=2, label=display_label)
+                    plot_real, plot_imag = self.decimated_xy(z.real, z.imag)
+                    axes[0].plot(plot_real, plot_imag, ".-", ms=2, label=display_label)
                     axes[0].set_xlabel("I")
                     axes[0].set_ylabel("Q")
                 elif kind == "raw buttons":
                     for button in buttons_to_plot:
                         raw = phasors[button]
-                        axes[0].plot(turns, raw.real, label=f"{display_label} {button} I", alpha=0.75)
-                        axes[0].plot(turns, raw.imag, label=f"{display_label} {button} Q", alpha=0.75, linestyle="--")
+                        raw_turns, raw_real = self.decimated_xy(np.arange(raw.size), raw.real)
+                        _raw_turns, raw_imag = self.decimated_xy(np.arange(raw.size), raw.imag)
+                        axes[0].plot(raw_turns, raw_real, label=f"{display_label} {button} I", alpha=0.75)
+                        axes[0].plot(raw_turns, raw_imag, label=f"{display_label} {button} Q", alpha=0.75, linestyle="--")
                     axes[0].set_ylabel("raw I/Q [arb.]")
                     break
                 elif kind == "magnitude":
-                    mag = np.abs(z) if mag is None else mag
-                    axes[0].plot(turns, mag, label=display_label)
+                    mag = np.asarray(np.abs(z) if mag is None else mag)
+                    plot_turns, plot_mag = self.decimated_xy(turns, mag)
+                    axes[0].plot(plot_turns, plot_mag, label=display_label)
                     axes[0].set_ylabel("|phasor|")
-                    mag_spec = spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
+                    mag_spec = analysis.get("mag_spec") or spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
                     f, p_raw = mag_spec["frequency_hz"], mag_spec["psd"]
                     p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
                     self._record_peaks(peak_records, label, "mag", f, p)
@@ -676,9 +806,11 @@ class PlotWindow(tk.Toplevel):
                     axes[1].set_xlim(*self._frequency_xlim())
                 elif kind == "phase":
                     assert phase is not None
-                    axes[0].plot(turns, phase, label=display_label)
+                    phase = np.asarray(phase)
+                    plot_turns, plot_phase = self.decimated_xy(turns, phase)
+                    axes[0].plot(plot_turns, plot_phase, label=display_label)
                     axes[0].set_ylabel("unwrapped phase [rad]")
-                    phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    phase_spec = analysis.get("phase_spec") or spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
                     f, p_raw = phase_spec["frequency_hz"], phase_spec["psd"]
                     p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
                     self._record_peaks(peak_records, label, "phase", f, p)
@@ -691,13 +823,15 @@ class PlotWindow(tk.Toplevel):
                     denom = phasors.get("A", 0) + phasors.get("B", 0) + phasors.get("C", 0) + phasors.get("D", 0)
                     with np.errstate(divide="ignore", invalid="ignore"):
                         value = np.real(z / denom) if np.ndim(denom) else np.real(z)
-                    axes[0].plot(turns, value, label=display_label)
+                    plot_turns, plot_value = self.decimated_xy(turns, value)
+                    axes[0].plot(plot_turns, plot_value, label=display_label)
                     axes[0].set_ylabel("Re(combination / sum), uncalibrated")
                 elif kind == "spectra":
                     assert phase is not None
-                    mag = np.abs(z) if mag is None else mag
-                    phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
-                    mag_spec = spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
+                    phase = np.asarray(phase)
+                    mag = np.asarray(np.abs(z) if mag is None else mag)
+                    phase_spec = analysis.get("phase_spec") or spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    mag_spec = analysis.get("mag_spec") or spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
                     f_phase, p_phase_raw = phase_spec["frequency_hz"], phase_spec["psd"]
                     f_mag, p_mag_raw = mag_spec["frequency_hz"], mag_spec["psd"]
                     p_phase = normalize_power(p_phase_raw) if self.normalize_spectra.get() else p_phase_raw
@@ -713,14 +847,19 @@ class PlotWindow(tk.Toplevel):
                     axes[1].set_xlim(*self._frequency_xlim())
                 elif kind == "phase debug":
                     assert phase is not None and phase_steps is not None
-                    phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    phase = np.asarray(phase)
+                    phase_spec = analysis.get("phase_spec") or spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
                     p_raw = phase_spec["psd"]
                     p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
                     self._record_peaks(peak_records, label, "phase", phase_spec["frequency_hz"], p)
-                    axes[0].plot(turns, phase_steps["raw_phase"], label=display_label)
-                    axes[1].plot(turns, phase, label=display_label)
-                    axes[2].plot(turns, phase_spec["detrended"], label=display_label)
-                    axes[2].plot(turns, phase_spec["windowed"], label=f"{display_label} windowed", alpha=0.65, linestyle="--")
+                    raw_turns, raw_phase = self.decimated_xy(turns, phase_steps["raw_phase"])
+                    phase_turns, plot_phase = self.decimated_xy(turns, phase)
+                    det_turns, detrended = self.decimated_xy(turns, phase_spec["detrended"])
+                    _win_turns, windowed = self.decimated_xy(turns, phase_spec["windowed"])
+                    axes[0].plot(raw_turns, raw_phase, label=display_label)
+                    axes[1].plot(phase_turns, plot_phase, label=display_label)
+                    axes[2].plot(det_turns, detrended, label=display_label)
+                    axes[2].plot(det_turns, windowed, label=f"{display_label} windowed", alpha=0.65, linestyle="--")
                     axes[3].semilogy(self._frequency_axis_values(phase_spec["frequency_hz"]), self._spectrum_display_power(p, trace_index), label=display_label, alpha=0.78)
                     axes[0].set_ylabel("angle(z) [rad]")
                     axes[1].set_ylabel("phase [rad]")
@@ -730,11 +869,14 @@ class PlotWindow(tk.Toplevel):
                     axes[3].set_xlim(*self._frequency_xlim())
                 else:  # all
                     assert phase is not None
-                    mag = np.abs(z) if mag is None else mag
-                    axes[0].plot(turns, mag, label=display_label)
-                    axes[1].plot(turns, phase, label=display_label)
-                    phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
-                    mag_spec = spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
+                    phase = np.asarray(phase)
+                    mag = np.asarray(np.abs(z) if mag is None else mag)
+                    mag_turns, plot_mag = self.decimated_xy(turns, mag)
+                    phase_turns, plot_phase = self.decimated_xy(turns, phase)
+                    axes[0].plot(mag_turns, plot_mag, label=display_label)
+                    axes[1].plot(phase_turns, plot_phase, label=display_label)
+                    phase_spec = analysis.get("phase_spec") or spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    mag_spec = analysis.get("mag_spec") or spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
                     f_phase, p_phase_raw = phase_spec["frequency_hz"], phase_spec["psd"]
                     f_mag, p_mag_raw = mag_spec["frequency_hz"], mag_spec["psd"]
                     p_phase = normalize_power(p_phase_raw) if self.normalize_spectra.get() else p_phase_raw
@@ -806,6 +948,7 @@ class PlotWindow(tk.Toplevel):
             "Load: "
             f"{len(active_bpms)} BPM, {len(buttons_to_plot)} button(s), {array_pvs_planned} array PVs planned/"
             f"{self._refresh_array_pvs_read} fresh, {self._refresh_cache_hits} cache hit(s), "
+            f"{self._refresh_analysis_hits} analysis hit(s), max plot {self.max_time_points():,}, "
             f"{scalar_samples:,} scalar samples, {human_bytes(payload_bytes)} processed, "
             f"{elapsed_ms:.0f} ms ({human_bytes(rate_bps)}/s)"
             + (" LAGGING" if lag else "")
@@ -822,6 +965,8 @@ class PlotWindow(tk.Toplevel):
                 array_pvs_planned=array_pvs_planned,
                 array_pvs_read=self._refresh_array_pvs_read,
                 cache_hits=self._refresh_cache_hits,
+                analysis_cache_hits=self._refresh_analysis_hits,
+                max_time_points=self.max_time_points(),
                 scalar_samples=scalar_samples,
                 bytes_processed=payload_bytes,
                 estimated_payload_bytes=estimate["bytes"],

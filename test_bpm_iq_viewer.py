@@ -12,6 +12,7 @@ from bpm_core import (
     COMBINATION_PRESETS,
     combine_selected_expressions,
     combination_expression,
+    decimation_stride,
     estimate_iq_payload,
     find_spectrum_peaks,
     human_bytes,
@@ -150,6 +151,11 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(payload["samples"], 131072.0)
         self.assertEqual(payload["bytes"], 1048576.0)
         self.assertEqual(human_bytes(payload["bytes"]), "1.0 MiB")
+
+    def test_decimation_stride_limits_display_points(self):
+        self.assertEqual(decimation_stride(1000, 2500), 1)
+        self.assertEqual(decimation_stride(8192, 2500), 4)
+        self.assertEqual(decimation_stride(8192, 0), 1)
 
     def test_config_save_roundtrip_keeps_runtime_pv_edits(self):
         with tempfile.TemporaryDirectory() as tmp:

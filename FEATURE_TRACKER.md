@@ -20,6 +20,8 @@ This file tracks requested control-room BPM viewer work so implementation status
 - Spectrum overlays can be normalized and visually stacked so multiple BPMs/signals stay visible.
 - Plot and main windows show live performance/load indicators for PV count, sample count, bytes, elapsed time, cache hits, and lagging refreshes.
 - Default live plot refresh is 3 seconds and can be changed per plot window.
+- Plot-window settings are grouped into tabs so controls fit on shorter screens.
+- Raw time traces are display-decimated and repeated cached refreshes reuse derived analysis results where possible.
 - Phase debug plot shows wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.
 - FFT settings are editable: unwrap threshold, detrend, window, NFFT, and frequency resolution.
 - TBT start/stop/check controls use the control-room `ddc_raw` and `ddc_synth` `.SCAN` PVs.

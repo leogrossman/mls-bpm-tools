@@ -41,6 +41,7 @@ python3 bpm_iq_viewer.py --demo
 - The plot side pane lists tune PV status, valid tune/harmonic markers, and automatically detected spectrum peaks in the selected frequency units.
 - Live plots default to a 3 second refresh and show a load/performance line with PV count, sample count, processed bytes, elapsed time, and lag status.
 - Recent raw BPM reads are cached briefly inside each plot window to avoid repeated EPICS reads during UI-only redraws.
+- Plot controls are grouped into left-pane tabs; raw time traces are display-decimated while FFTs still use full-resolution data.
 
 ## Tests
 
