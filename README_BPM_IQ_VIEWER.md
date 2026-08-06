@@ -35,6 +35,8 @@ On the control-room machine, with live reads but all writes blocked:
 python3 bpm_iq_viewer.py --safe
 ```
 
+This preselects known BPMs and opens an initial raw A/B/C/D button plot. Add `--no-startup-plot` if you want the old empty workspace.
+
 Open several BPMs immediately:
 
 ```bash

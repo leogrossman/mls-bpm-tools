@@ -383,7 +383,14 @@ def tune_markers_from_values(tunes: Mapping[str, Mapping[str, object]], fs: floa
 
 
 class PlotWindow(tk.Toplevel):
-    def __init__(self, app: "BPMViewer", bpm_names: Sequence[str], expression: str = "A+B+C+D"):
+    def __init__(
+        self,
+        app: "BPMViewer",
+        bpm_names: Sequence[str],
+        expression: str = "A+B+C+D",
+        plot_kind: str = "spectra",
+        show_tunes: bool = True,
+    ):
         super().__init__(app.root)
         self.app = app
         self.bpm_names = list(bpm_names)
@@ -398,7 +405,7 @@ class PlotWindow(tk.Toplevel):
         self.expr = tk.StringVar(value=expression)
         ttk.Entry(controls, textvariable=self.expr, width=34).pack(side=tk.LEFT, padx=4)
         ttk.Label(controls, text="Plot:").pack(side=tk.LEFT, padx=(12, 2))
-        self.plot_kind = tk.StringVar(value="spectra")
+        self.plot_kind = tk.StringVar(value=plot_kind)
         ttk.Combobox(
             controls,
             textvariable=self.plot_kind,
@@ -408,7 +415,7 @@ class PlotWindow(tk.Toplevel):
         ).pack(side=tk.LEFT)
         self.live = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Live", variable=self.live).pack(side=tk.LEFT, padx=10)
-        self.show_tunes = tk.BooleanVar(value=True)
+        self.show_tunes = tk.BooleanVar(value=show_tunes)
         ttk.Checkbutton(controls, text="Tunes", variable=self.show_tunes).pack(side=tk.LEFT)
         self.show_harmonics = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Harmonics", variable=self.show_harmonics).pack(side=tk.LEFT)
@@ -945,6 +952,15 @@ class BPMViewer:
                 self.listbox.selection_set(index)
         self.status.set(f"Selected {len(targets)} known BPM candidate(s). Starred BPMs have orbit PVs seen in betagui/CS-Studio material.")
 
+    def open_startup_plot(self, expression: str = "A; B; C; D; A+B+C+D") -> None:
+        self.select_known_bpms()
+        names = self.selected_names()[:2] or [bpm.name for bpm in self.known_bpms()[:2]]
+        if not names:
+            self.status.set("No BPMs configured; check bpm_config.json.")
+            return
+        self.session.event("startup_plot_opened", bpms=names, expression=expression, plot_kind="raw buttons")
+        PlotWindow(self, names, expression=expression, plot_kind="raw buttons", show_tunes=False)
+
     def open_selected(self) -> None:
         names = self.selected_names()
         if not names:
@@ -1209,6 +1225,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-writes", action="store_true", help="allow confirmed EPICS writes; requires --live and is blocked by --safe")
     p.add_argument("--bpm", action="append", default=[], help="open plot for BPM at startup; repeatable")
     p.add_argument("--combination", default="A+B+C+D", help="startup combination expression")
+    p.add_argument("--no-startup-plot", action="store_true", help="do not auto-select known BPMs or open the initial raw-button plot")
     p.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_ROOT, help="directory for session logs")
     p.add_argument("--log-level", default="INFO")
     return p
@@ -1265,7 +1282,9 @@ def main() -> int:
     root = tk.Tk()
     app = BPMViewer(root, cfg, backend, mode_label=mode_label, can_write_machine=can_write_machine, session=session)
     if args.bpm:
-        root.after(150, lambda: PlotWindow(app, args.bpm, expression=args.combination))
+        root.after(150, lambda: PlotWindow(app, args.bpm, expression=args.combination, show_tunes=False))
+    elif not args.no_startup_plot:
+        root.after(150, lambda: app.open_startup_plot())
     root.mainloop()
     return 0
 

@@ -16,6 +16,7 @@ python3 bpm_iq_viewer.py --safe
 
 - live EPICS reads are allowed
 - machine writes are blocked
+- known BPMs are preselected and an initial raw-button plot opens automatically
 - optional tune/noise/status PVs are not read during GUI startup
 - missing/broken PVs should not crash the GUI
 - scalar tune/noise/status PVs use a short timeout so bad candidates fail fast
@@ -212,8 +213,8 @@ For now these are read-only. Later, write controls can be added behind explicit 
 ## GUI Use
 
 1. Start with `python3 bpm_iq_viewer.py --safe`.
-2. Select one BPM, for example `BPMZ1L2RP`, or click `Select known BPMs`. Starred BPMs have orbit PV names seen in local `betagui`/CS-Studio material.
-3. Open a plot window.
+2. The GUI preselects known BPMs and opens an initial raw-button plot for the first two known BPMs. Use `--no-startup-plot` if you want an empty workspace.
+3. Select another BPM, for example `BPMZ1L2RP`, or click `Select known BPMs`. Starred BPMs have orbit PV names seen in local `betagui`/CS-Studio material.
 4. First inspect individual buttons with expressions `A`, `B`, `C`, `D`.
 5. Use `raw buttons` plot mode to compare all I/Q traces.
 6. Use `A+B+C+D` for common mode.
