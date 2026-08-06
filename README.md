@@ -12,29 +12,29 @@ The first workflow is read-only and safe by default. Write-capable TBT start/sto
 git pull
 ```
 
-2. Start the GUI safely:
+2. Start the GUI safely. No extra flags are needed in the control room:
 
 ```bash
-python3 bpm_iq_viewer.py --safe
+python3 bpm_iq_viewer.py
 ```
 
-3. The app opens a raw A/B/C/D plot for known BPMs. If it is blank, click `Check TBT status`; if the selected BPMs are `Passive`, ask whether it is OK to start TBT logging.
+3. Click a BPM marker in the top lattice strip, or double-click a BPM row in the list. The app opens a viewer only after you choose a BPM.
 4. To inspect spectra, switch the plot mode to `phase debug` first. This shows `angle`, `unwrap`, `detrend/window`, and PSD separately.
 5. If PV names are wrong, use `PV probe / edit IDs`, edit the ID, then `Save config`.
 
 ## Control-Room Start
 
-Use this command for normal exploration:
+Use this command for normal read-only exploration:
 
 ```bash
-python3 bpm_iq_viewer.py --safe
+python3 bpm_iq_viewer.py
 ```
 
-`--safe` means:
+This default mode means:
 
 - live EPICS reads are allowed
 - machine writes are blocked
-- known BPMs are preselected and an initial raw-button plot opens automatically
+- no plot is opened until you click a BPM marker, double-click a BPM row, or pass `--bpm`
 - the Start/Stop TBT buttons only preview/block writes
 - optional tune/noise/status PVs are not read during GUI startup
 - missing/broken PVs should not crash the GUI
@@ -63,12 +63,6 @@ stop:  {bpm}:signals:ddc_synth.SCAN <- "Passive"
 Away from the control room, this uses synthetic data and no EPICS connection:
 
 ```bash
-python3 bpm_iq_viewer.py
-```
-
-This is equivalent to:
-
-```bash
 python3 bpm_iq_viewer.py --demo
 ```
 
@@ -80,6 +74,7 @@ python3 bpm_iq_viewer.py --demo
 - `tests/fixtures/control_room_BPMZ1L2RP_sum_2048.npz`: compact real raw snapshot used by regression tests.
 - `requirements.txt`: Python dependencies.
 - `test_bpm_iq_viewer.py`: offline unit tests.
+- `FEATURE_TRACKER.md`: implemented and pending request tracker.
 - `README_BPM_IQ_VIEWER.md`: older detailed prototype notes; this `README.md` is the current entry point.
 
 ## Install Check
@@ -246,17 +241,17 @@ For now these are read-only. Later, write controls can be added behind explicit 
 
 ## GUI Use
 
-1. Start with `python3 bpm_iq_viewer.py --safe`.
-2. The GUI preselects known BPMs and opens an initial raw-button plot for the first two known BPMs. Use `--no-startup-plot` if you want an empty workspace.
+1. Start with `python3 bpm_iq_viewer.py`.
+2. Click a BPM marker in the top lattice strip or double-click a BPM row.
 3. Select another BPM, for example `BPMZ1L2RP`, or click `Select known BPMs`. Starred BPMs have orbit PV names seen in local `betagui`/CS-Studio material.
 4. Use `Select all BPMs` for the full configured ring list or type in the search box and use `Select visible/filter`.
-5. First inspect individual buttons with expressions `A`, `B`, `C`, `D`.
-6. Use `raw buttons` plot mode to compare all I/Q traces.
+5. In a plot window, use `Signals to plot`. The default is only `A` and `A+B+C+D`; add B/C/D/differences/custom expressions only when needed.
+6. Use `raw buttons` plot mode to compare selected raw I/Q traces.
 7. Use `A+B+C+D` for common mode.
 8. Try `phase debug` before trusting a spectrum; it shows every step in the phase-spectrum calculation.
 9. Try `spectra` to see phase and magnitude spectra together.
 10. Toggle `Tunes` and `Harmonics` in plot windows to overlay live tune marker lines.
-11. Use the `BPM overlays` panel in each plot window to add BPMs, add the main-window selection, and toggle individual BPM traces on/off without closing the viewer.
+11. Use the `BPM overlays` panel in each plot window to add BPMs, add the main-window selection, and toggle individual BPM traces on/off without closing the viewer. Toggle `Legend` when the legend gets in the way.
 12. Use the Matplotlib toolbar under the plot to pan, zoom, and move around spectra or turn-by-turn traces.
 13. Enter multiple expressions separated by semicolons, for example `A+B+C+D; A-B; (A+B)-(C+D)`.
 14. Try difference expressions only as uncalibrated diagnostics until button geometry is confirmed.

@@ -10,6 +10,8 @@ from bpm_iq_viewer import (
     DemoBackend,
     SessionLogger,
     SpectrumSettings,
+    build_arg_parser,
+    combine_selected_expressions,
     combination_expression,
     normalize_button_tokens,
     phase_pipeline,
@@ -17,6 +19,7 @@ from bpm_iq_viewer import (
     read_button_phasors,
     spectrum,
     spectrum_pipeline,
+    runtime_mode_from_args,
     tbt_scan_commands,
     tune_markers_from_values,
     tune_value_to_frequency,
@@ -49,6 +52,31 @@ class BPMIQViewerTest(unittest.TestCase):
     def test_button_token_detection(self):
         self.assertEqual(normalize_button_tokens("(A+B)-(C+D)"), ["A", "B", "C", "D"])
         self.assertEqual(normalize_button_tokens("mean(A,A,b)"), ["A", "B"])
+
+    def test_expression_preset_builder_defaults_and_custom(self):
+        self.assertEqual(combine_selected_expressions([], "", False), "A; A+B+C+D")
+        self.assertEqual(
+            combine_selected_expressions(["A", "A+B+C+D", "A"], "B; C", True),
+            "A; A+B+C+D; B; C",
+        )
+
+    def test_default_runtime_is_live_safe_not_demo(self):
+        parser = build_arg_parser()
+
+        use_live, can_write, label = runtime_mode_from_args(parser.parse_args([]))
+
+        self.assertTrue(use_live)
+        self.assertFalse(can_write)
+        self.assertIn("LIVE SAFE", label)
+
+    def test_demo_runtime_is_explicit(self):
+        parser = build_arg_parser()
+
+        use_live, can_write, label = runtime_mode_from_args(parser.parse_args(["--demo"]))
+
+        self.assertFalse(use_live)
+        self.assertFalse(can_write)
+        self.assertIn("DEMO", label)
 
     def test_pv_templates_and_status_config_load(self):
         config_text = """

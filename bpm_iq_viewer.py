@@ -87,6 +87,16 @@ except ImportError:
 DEFAULT_SAMPLE_RATE = 6.25e6
 BUTTONS = ("A", "B", "C", "D")
 DEFAULT_LOG_ROOT = Path(".mls_bpm_local") / "logs"
+COMBINATION_PRESETS = (
+    ("A", "A"),
+    ("Sum A+B+C+D", "A+B+C+D"),
+    ("B", "B"),
+    ("C", "C"),
+    ("D", "D"),
+    ("Horizontal diff", "(A+B)-(C+D)"),
+    ("Vertical diff", "(A+D)-(B+C)"),
+    ("Mean", "mean(A,B,C,D)"),
+)
 
 
 @dataclass
@@ -432,6 +442,19 @@ def parse_expressions(text: str) -> List[str]:
     return expressions or ["A+B+C+D"]
 
 
+def combine_selected_expressions(presets: Sequence[str], custom: str = "", use_custom: bool = False) -> str:
+    expressions = [expr.strip() for expr in presets if expr.strip()]
+    if use_custom:
+        expressions.extend(parse_expressions(custom))
+    seen: set = set()
+    unique = []
+    for expr in expressions:
+        if expr not in seen:
+            unique.append(expr)
+            seen.add(expr)
+    return "; ".join(unique or ["A", "A+B+C+D"])
+
+
 def tune_value_to_frequency(value: object, fs: float, unit: str = "auto") -> Optional[Tuple[float, float]]:
     try:
         numeric = float(np.asarray(value).ravel()[0])
@@ -477,9 +500,9 @@ class PlotWindow(tk.Toplevel):
         self,
         app: "BPMViewer",
         bpm_names: Sequence[str],
-        expression: str = "A+B+C+D",
-        plot_kind: str = "spectra",
-        show_tunes: bool = True,
+        expression: str = "A; A+B+C+D",
+        plot_kind: str = "phase debug",
+        show_tunes: bool = False,
     ):
         super().__init__(app.root)
         self.app = app
@@ -492,10 +515,7 @@ class PlotWindow(tk.Toplevel):
 
         controls = ttk.Frame(self)
         controls.pack(side=tk.TOP, fill=tk.X, padx=6, pady=4)
-        ttk.Label(controls, text="Combination:").pack(side=tk.LEFT)
-        self.expr = tk.StringVar(value=expression)
-        ttk.Entry(controls, textvariable=self.expr, width=34).pack(side=tk.LEFT, padx=4)
-        ttk.Label(controls, text="Plot:").pack(side=tk.LEFT, padx=(12, 2))
+        ttk.Label(controls, text="Plot:").pack(side=tk.LEFT, padx=(0, 2))
         self.plot_kind = tk.StringVar(value=plot_kind)
         ttk.Combobox(
             controls,
@@ -510,6 +530,8 @@ class PlotWindow(tk.Toplevel):
         ttk.Checkbutton(controls, text="Tunes", variable=self.show_tunes).pack(side=tk.LEFT)
         self.show_harmonics = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Harmonics", variable=self.show_harmonics).pack(side=tk.LEFT)
+        self.show_legend = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls, text="Legend", variable=self.show_legend, command=self.refresh).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(controls, text="Refresh now", command=self.refresh).pack(side=tk.LEFT)
         ttk.Button(controls, text="Pause", command=self.toggle_pause).pack(side=tk.LEFT, padx=4)
         ttk.Button(controls, text="Save data", command=self.save_data).pack(side=tk.LEFT, padx=4)
@@ -545,6 +567,21 @@ class PlotWindow(tk.Toplevel):
         self.bpm_rows = ttk.Frame(bpm_box)
         self.bpm_rows.pack(fill=tk.BOTH, expand=True)
 
+        combo_box = ttk.LabelFrame(side, text="Signals to plot", padding=6)
+        combo_box.pack(fill=tk.X, pady=(8, 0))
+        requested_expressions = set(parse_expressions(expression))
+        self.preset_expression_vars: Dict[str, tk.BooleanVar] = {}
+        for label, expr in COMBINATION_PRESETS:
+            default_on = expr in requested_expressions or (not requested_expressions and expr in {"A", "A+B+C+D"})
+            var = tk.BooleanVar(value=default_on)
+            self.preset_expression_vars[expr] = var
+            ttk.Checkbutton(combo_box, text=label, variable=var, command=self.refresh).pack(anchor="w")
+        self.use_custom_expr = tk.BooleanVar(value=False)
+        ttk.Checkbutton(combo_box, text="Custom", variable=self.use_custom_expr, command=self.refresh).pack(anchor="w")
+        self.expr = tk.StringVar(value="")
+        ttk.Entry(combo_box, textvariable=self.expr, width=26).pack(fill=tk.X, pady=(2, 0))
+        ttk.Button(combo_box, text="Apply signals", command=self.refresh).pack(fill=tk.X, pady=(4, 0))
+
         tune_box = ttk.LabelFrame(side, text="Spectrum markers", padding=6)
         tune_box.pack(fill=tk.X, pady=(8, 0))
         ttk.Label(
@@ -571,7 +608,7 @@ class PlotWindow(tk.Toplevel):
         self.nfft_text = tk.StringVar(value="")
         ttk.Entry(fft_box, textvariable=self.nfft_text, width=10).grid(row=4, column=1, sticky="ew")
         ttk.Label(fft_box, text="df Hz").grid(row=5, column=0, sticky="w")
-        self.freq_res_text = tk.StringVar(value="1000")
+        self.freq_res_text = tk.StringVar(value="500")
         ttk.Entry(fft_box, textvariable=self.freq_res_text, width=10).grid(row=5, column=1, sticky="ew")
         self.log_raw_snapshots = tk.BooleanVar(value=True)
         ttk.Checkbutton(fft_box, text="log first raw snapshot", variable=self.log_raw_snapshots).grid(row=6, column=0, columnspan=2, sticky="w")
@@ -659,6 +696,10 @@ class PlotWindow(tk.Toplevel):
         self.bpm_enabled = {bpm: self.bpm_enabled[bpm] for bpm in self.bpm_names}
         self.rebuild_bpm_rows()
         self.refresh()
+
+    def selected_expression_text(self) -> str:
+        presets = [expr for expr, var in self.preset_expression_vars.items() if var.get()]
+        return combine_selected_expressions(presets, self.expr.get(), self.use_custom_expr.get())
 
     def toggle_pause(self) -> None:
         self.running = not self.running
@@ -764,11 +805,12 @@ class PlotWindow(tk.Toplevel):
         else:
             axes = [self.figure.add_subplot(111)]
 
-        expr_text = self.expr.get().strip()
+        expr_text = self.selected_expression_text()
         expressions = parse_expressions(expr_text)
         buttons_needed = sorted(set(button for expr in expressions for button in normalize_button_tokens(expr)))
         if kind in ("position-like", "raw buttons"):
-            buttons_needed = list(BUTTONS)
+            buttons_needed = list(BUTTONS) if any("+" in expr or "-" in expr or "mean" in expr or "sum" in expr for expr in expressions) else buttons_needed
+        buttons_to_plot = buttons_needed or ["A"]
         settings = self.spectrum_settings()
         self.last_data = {}
         self.last_errors = {}
@@ -822,7 +864,7 @@ class PlotWindow(tk.Toplevel):
                     axes[0].set_xlabel("I")
                     axes[0].set_ylabel("Q")
                 elif kind == "raw buttons":
-                    for button in BUTTONS:
+                    for button in buttons_to_plot:
                         raw = phasors[button]
                         axes[0].plot(turns, raw.real, label=f"{bpm} {button} I", alpha=0.75)
                         axes[0].plot(turns, raw.imag, label=f"{bpm} {button} Q", alpha=0.75, linestyle="--")
@@ -925,13 +967,13 @@ class PlotWindow(tk.Toplevel):
             if tune_markers and is_spectrum_axis:
                 self._draw_tune_markers(ax, tune_markers)
             handles, _labels = ax.get_legend_handles_labels()
-            if handles:
+            if handles and self.show_legend.get():
                 ax.legend(loc="best")
         self.figure.tight_layout()
         self.canvas.draw_idle()
         suffix = f"; {len(self.last_errors)} error(s)" if self.last_errors else ""
         tune_suffix = f"; {len(tune_markers)} tune marker(s)" if tune_markers else ""
-        self.status.set(f"Updated {time.strftime('%H:%M:%S')} - {len(active_bpms)} BPM(s), expression {self.expr.get()}{tune_suffix}{suffix}")
+        self.status.set(f"Updated {time.strftime('%H:%M:%S')} - {len(active_bpms)} BPM(s), signals {expr_text}{tune_suffix}{suffix}")
 
     def _draw_tune_markers(self, ax, markers: Sequence[Tuple[float, str, str]]) -> None:
         ymin, ymax = ax.get_ylim()
@@ -1141,8 +1183,8 @@ class BPMViewer:
         self.mode_label = mode_label
         self.can_write_machine = can_write_machine
         self.session = session
-        self.root.title("MLS BPM I/Q Viewer — prototype")
-        self.root.geometry("980x760")
+        self.root.title("MLS BPM I/Q Viewer")
+        self.root.geometry("1120x820")
         self.selected: List[str] = []
         self.status_after_id: Optional[str] = None
         self._last_status_values: Dict[str, str] = {}
@@ -1150,24 +1192,41 @@ class BPMViewer:
         self._last_tune_values: Dict[str, str] = {}
         self.bpm_by_name = {bpm.name: bpm for bpm in self.cfg.bpms}
         self.displayed_bpm_names: List[str] = []
+        self.strip_bpm_items: Dict[int, str] = {}
 
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main, text="BPM overview", font=("TkDefaultFont", 12, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            main,
+            text="Click a BPM marker below or double-click a BPM in the list to open a live viewer. Start in safe/read-only mode unless writes are explicitly allowed.",
+            wraplength=760,
+            justify=tk.LEFT,
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+
+        strip_box = ttk.LabelFrame(main, text="BPM lattice overview", padding=4)
+        strip_box.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self.bpm_strip = tk.Canvas(strip_box, height=74, bg="#f6f6f6", highlightthickness=0)
+        self.bpm_strip.pack(fill=tk.X, expand=True)
+        self.bpm_strip.bind("<Configure>", lambda _e: self.draw_bpm_strip())
+        self.bpm_strip.bind("<Button-1>", self.on_bpm_strip_click)
+
+        ttk.Label(main, text="BPM list", font=("TkDefaultFont", 12, "bold")).grid(row=2, column=0, sticky="w")
         self.search = tk.StringVar()
-        ttk.Label(main, text="Filter BPM name or section:").grid(row=1, column=0, sticky="w")
+        ttk.Label(main, text="Filter BPM name or section:").grid(row=3, column=0, sticky="w")
         search_entry = ttk.Entry(main, textvariable=self.search, width=28)
-        search_entry.grid(row=2, column=0, sticky="ew", pady=(2, 4))
+        search_entry.grid(row=4, column=0, sticky="ew", pady=(2, 4))
         search_entry.bind("<KeyRelease>", lambda _e: self.populate_bpms())
 
         self.listbox = tk.Listbox(main, selectmode=tk.EXTENDED, exportselection=False)
-        self.listbox.grid(row=3, column=0, rowspan=8, sticky="nsew")
+        self.listbox.grid(row=5, column=0, rowspan=8, sticky="nsew")
         self.listbox.bind("<Double-Button-1>", lambda _e: self.open_selected())
+        self.listbox.bind("<Return>", lambda _e: self.open_selected())
+        self.listbox.bind("<<ListboxSelect>>", lambda _e: self.draw_bpm_strip())
         self.populate_bpms()
 
         buttons = ttk.Frame(main)
-        buttons.grid(row=3, column=1, sticky="new", padx=(10, 0))
+        buttons.grid(row=5, column=1, sticky="new", padx=(10, 0))
         ttk.Button(buttons, text="Open selected plot", command=self.open_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Select all BPMs", command=self.select_all_bpms).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Select visible/filter", command=self.select_visible_bpms).pack(fill=tk.X, pady=2)
@@ -1187,7 +1246,7 @@ class BPMViewer:
         ttk.Button(buttons, text="Quit", command=root.destroy).pack(fill=tk.X, pady=2)
 
         pv_box = ttk.LabelFrame(main, text="Editable PV templates", padding=8)
-        pv_box.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        pv_box.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.pv_template_vars: Dict[str, tk.StringVar] = {}
         for row, key in enumerate(("scan", "synth_scan", "i", "q")):
             ttk.Label(pv_box, text=key).grid(row=row, column=0, sticky="w")
@@ -1198,17 +1257,17 @@ class BPMViewer:
         pv_box.columnconfigure(1, weight=1)
 
         self.tune_frame = ttk.LabelFrame(main, text="Read-only tune PVs for spectrum markers", padding=8)
-        self.tune_frame.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.tune_frame.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.tune_rows: List[Tuple[TunePV, tk.StringVar, tk.Label, tk.BooleanVar, tk.StringVar]] = []
         self.build_tune_rows()
 
         self.status_pv_frame = ttk.LabelFrame(main, text="Read-only excitation / status PVs", padding=8)
-        self.status_pv_frame.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.status_pv_frame.grid(row=15, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.status_pv_rows: List[Tuple[StatusPV, tk.StringVar, tk.Label, tk.BooleanVar, tk.StringVar]] = []
         self.build_status_pv_rows()
 
         info = ttk.LabelFrame(main, text="Combination examples", padding=8)
-        info.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        info.grid(row=16, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         ttk.Label(
             info,
             justify=tk.LEFT,
@@ -1222,11 +1281,11 @@ class BPMViewer:
         ).pack(anchor="w")
 
         self.status = tk.StringVar(value=mode_label)
-        ttk.Label(main, textvariable=self.status).grid(row=15, column=0, columnspan=2, sticky="w", pady=8)
+        ttk.Label(main, textvariable=self.status).grid(row=17, column=0, columnspan=2, sticky="w", pady=8)
 
-        main.rowconfigure(3, weight=1)
+        main.rowconfigure(5, weight=1)
         main.columnconfigure(0, weight=1)
-        self.status.set(f"{mode_label}. Optional tune/status PVs are not read on startup; click Refresh or open a spectrum.")
+        self.status.set(f"{mode_label}. No plot is opened automatically; click a BPM marker or double-click a list row.")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def populate_bpms(self) -> None:
@@ -1241,6 +1300,49 @@ class BPMViewer:
                 display = f"{marker} {bpm.name:<10} {bpm.section:<3}{orbit}"
                 self.listbox.insert(tk.END, display)
                 self.displayed_bpm_names.append(bpm.name)
+        self.draw_bpm_strip()
+
+    def draw_bpm_strip(self) -> None:
+        if not hasattr(self, "bpm_strip"):
+            return
+        canvas = self.bpm_strip
+        canvas.delete("all")
+        self.strip_bpm_items = {}
+        bpms = sorted(self.cfg.bpms, key=lambda b: b.s_m)
+        if not bpms:
+            canvas.create_text(20, 30, text="No BPMs configured", anchor="w")
+            return
+        width = max(canvas.winfo_width(), 640)
+        margin = 32
+        y = 34
+        s_min = min(b.s_m for b in bpms)
+        s_max = max(b.s_m for b in bpms)
+        span = max(s_max - s_min, 1.0)
+        canvas.create_line(margin, y, width - margin, y, fill="#606060", width=2)
+        visible = set(self.displayed_bpm_names)
+        for bpm in bpms:
+            x = margin + (bpm.s_m - s_min) / span * (width - 2 * margin)
+            selected = bpm.name in self.selected_names()
+            fill = "#2c7fb8" if bpm.known_orbit_pvs else "#8f8f8f"
+            if bpm.name not in visible:
+                fill = "#dddddd"
+            outline = "#111111" if selected else "#ffffff"
+            radius = 6 if bpm.known_orbit_pvs else 5
+            item = canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=fill, outline=outline, width=2, tags=("bpm", bpm.name))
+            self.strip_bpm_items[item] = bpm.name
+            canvas.create_text(x, y + 18, text=bpm.section if bpm.known_orbit_pvs else "", font=("TkDefaultFont", 7), fill="#404040")
+        canvas.create_text(margin, 10, text="Ring BPMs by lattice position. Blue = locally confirmed/known candidate. Click marker to open.", anchor="w", fill="#303030")
+
+    def on_bpm_strip_click(self, event) -> None:
+        item = self.bpm_strip.find_closest(event.x, event.y)
+        if not item:
+            return
+        bpm = self.strip_bpm_items.get(item[0])
+        if not bpm:
+            return
+        self.select_bpm(bpm)
+        self.session.event("main_bpm_marker_opened", bpm=bpm)
+        PlotWindow(self, [bpm])
 
     def select_bpm(self, bpm: str) -> None:
         for i, name in enumerate(self.displayed_bpm_names):
@@ -1248,6 +1350,7 @@ class BPMViewer:
                 self.listbox.selection_clear(0, tk.END)
                 self.listbox.selection_set(i)
                 self.listbox.see(i)
+                self.draw_bpm_strip()
                 break
 
     def selected_names(self) -> List[str]:
@@ -1257,6 +1360,7 @@ class BPMViewer:
         self.listbox.selection_clear(0, tk.END)
         if self.displayed_bpm_names:
             self.listbox.selection_set(0, len(self.displayed_bpm_names) - 1)
+        self.draw_bpm_strip()
         self.status.set(f"Selected {len(self.displayed_bpm_names)} visible BPM(s).")
 
     def select_all_bpms(self) -> None:
@@ -1266,6 +1370,7 @@ class BPMViewer:
 
     def clear_bpm_selection(self) -> None:
         self.listbox.selection_clear(0, tk.END)
+        self.draw_bpm_strip()
         self.status.set("Cleared BPM selection.")
 
     def known_bpms(self) -> List[BPMInfo]:
@@ -1278,6 +1383,7 @@ class BPMViewer:
         for index, name in enumerate(self.displayed_bpm_names):
             if name in targets:
                 self.listbox.selection_set(index)
+        self.draw_bpm_strip()
         self.status.set(f"Selected {len(targets)} known BPM candidate(s). Starred BPMs have orbit PVs seen in betagui/CS-Studio material.")
 
     def open_startup_plot(self, expression: str = "A; B; C; D; A+B+C+D") -> None:
@@ -1577,13 +1683,13 @@ class BPMViewer:
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Minimal live BPM I/Q viewer")
     p.add_argument("--config", type=Path, default=Path(__file__).with_name("bpm_config.json"))
-    p.add_argument("--safe", action="store_true", help="use live EPICS reads but block all machine writes")
-    p.add_argument("--demo", action="store_true", help="use synthetic waveforms; this is the default unless --live or --safe is given")
+    p.add_argument("--safe", action="store_true", help="use live EPICS reads but block all machine writes; this is also the default")
+    p.add_argument("--demo", action="store_true", help="use synthetic waveforms and no EPICS connection")
     p.add_argument("--live", action="store_true", help="use live EPICS reads")
     p.add_argument("--allow-writes", action="store_true", help="allow confirmed EPICS writes; requires --live and is blocked by --safe")
     p.add_argument("--bpm", action="append", default=[], help="open plot for BPM at startup; repeatable")
-    p.add_argument("--combination", default="A+B+C+D", help="startup combination expression")
-    p.add_argument("--no-startup-plot", action="store_true", help="do not auto-select known BPMs or open the initial raw-button plot")
+    p.add_argument("--combination", default="A; A+B+C+D", help="startup signal expression list for --bpm")
+    p.add_argument("--no-startup-plot", action="store_true", help="legacy no-op; startup plots are off unless --bpm is used")
     p.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_ROOT, help="directory for session logs")
     p.add_argument("--log-level", default="INFO")
     return p
@@ -1609,26 +1715,28 @@ def configure_logging(log_root: Path, log_level: str) -> SessionLogger:
     return SessionLogger(session_dir)
 
 
+def runtime_mode_from_args(args: argparse.Namespace) -> Tuple[bool, bool, str]:
+    if args.allow_writes and (args.safe or args.demo or not args.live):
+        raise SystemExit("--allow-writes requires --live and cannot be combined with --safe or --demo")
+    use_demo = bool(args.demo)
+    can_write_machine = bool(args.allow_writes and args.live and not use_demo)
+    if use_demo:
+        return False, False, "DEMO: synthetic data, no machine access"
+    if can_write_machine:
+        return True, True, "LIVE WRITE-CAPABLE: every machine write asks for confirmation"
+    return True, False, "LIVE SAFE: EPICS reads allowed, machine writes blocked"
+
+
 def main() -> int:
     args = build_arg_parser().parse_args()
     session = configure_logging(args.log_dir, args.log_level)
     cfg = AppConfig.load(args.config)
-    if args.allow_writes and (args.safe or args.demo or not args.live):
-        raise SystemExit("--allow-writes requires --live and cannot be combined with --safe or --demo")
-    use_live = args.live or args.safe
-    use_demo = args.demo or not use_live
+    use_live, can_write_machine, mode_label = runtime_mode_from_args(args)
     backend: Backend = (
         EpicsBackend(array_timeout=cfg.epics_array_timeout_s, scalar_timeout=cfg.epics_scalar_timeout_s)
         if use_live
         else DemoBackend(fs=cfg.sample_rate_hz)
     )
-    can_write_machine = bool(args.allow_writes and use_live)
-    if use_demo:
-        mode_label = "DEMO: synthetic data, no machine access"
-    elif can_write_machine:
-        mode_label = "LIVE WRITE-CAPABLE: every machine write asks for confirmation"
-    else:
-        mode_label = "LIVE SAFE: EPICS reads allowed, machine writes blocked"
     session.event(
         "startup",
         mode=mode_label,
@@ -1641,8 +1749,6 @@ def main() -> int:
     app = BPMViewer(root, cfg, backend, mode_label=mode_label, can_write_machine=can_write_machine, session=session)
     if args.bpm:
         root.after(150, lambda: PlotWindow(app, args.bpm, expression=args.combination, show_tunes=False))
-    elif not args.no_startup_plot:
-        root.after(150, lambda: app.open_startup_plot())
     root.mainloop()
     return 0
 
