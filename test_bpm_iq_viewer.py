@@ -168,10 +168,11 @@ class BPMIQViewerTest(unittest.TestCase):
 
         for mode in OPTICS_MODES:
             optics = basic_lattice_functions(s, mode)
-            self.assertEqual(set(optics), {"s_m", "beta_x_m", "beta_y_m", "dispersion_x_m"})
+            self.assertEqual(set(optics), {"s_m", "beta_x_m", "beta_y_m", "dispersion_x_m", "dispersion_y_m"})
             self.assertEqual(optics["beta_x_m"].shape, s.shape)
             self.assertEqual(optics["beta_y_m"].shape, s.shape)
             self.assertEqual(optics["dispersion_x_m"].shape, s.shape)
+            self.assertEqual(optics["dispersion_y_m"].shape, s.shape)
             self.assertTrue(np.all(optics["beta_x_m"] > 0.0))
             self.assertTrue(np.all(optics["beta_y_m"] > 0.0))
 

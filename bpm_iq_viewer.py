@@ -251,6 +251,15 @@ class PlotWindow(tk.Toplevel):
         side_tabs.add(signals_tab, text="Signals")
         side_tabs.add(analysis_tab, text="Analysis")
         side_tabs.add(fft_tab, text="FFT / perf")
+        fft_canvas = tk.Canvas(fft_tab, highlightthickness=0)
+        fft_scrollbar = ttk.Scrollbar(fft_tab, orient=tk.VERTICAL, command=fft_canvas.yview)
+        fft_content = ttk.Frame(fft_canvas)
+        fft_content_window = fft_canvas.create_window((0, 0), window=fft_content, anchor="nw")
+        fft_canvas.configure(yscrollcommand=fft_scrollbar.set)
+        fft_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        fft_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        fft_content.bind("<Configure>", lambda _e: fft_canvas.configure(scrollregion=fft_canvas.bbox("all")))
+        fft_canvas.bind("<Configure>", lambda e: fft_canvas.itemconfigure(fft_content_window, width=e.width))
 
         bpm_box = ttk.LabelFrame(bpm_tab, text="BPM overlays", padding=6)
         bpm_box.pack(fill=tk.BOTH, expand=True)
@@ -313,7 +322,7 @@ class PlotWindow(tk.Toplevel):
         self.analysis_text = tk.Text(analysis_box, height=12, width=30, wrap="none")
         self.analysis_text.pack(fill=tk.BOTH, expand=True)
 
-        fft_box = ttk.LabelFrame(fft_tab, text="FFT / phase settings", padding=6)
+        fft_box = ttk.LabelFrame(fft_content, text="FFT / phase settings", padding=6)
         fft_box.pack(fill=tk.X)
         self.unwrap_phase = tk.BooleanVar(value=True)
         ttk.Checkbutton(fft_box, text="unwrap(angle)", variable=self.unwrap_phase, command=self.refresh).grid(row=0, column=0, columnspan=2, sticky="w")
@@ -340,7 +349,7 @@ class PlotWindow(tk.Toplevel):
         ttk.Button(fft_box, text="Apply + refresh", command=self.refresh).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         fft_box.columnconfigure(1, weight=1)
 
-        perf_box = ttk.LabelFrame(fft_tab, text="Performance notes", padding=6)
+        perf_box = ttk.LabelFrame(fft_content, text="Performance notes", padding=6)
         perf_box.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         ttk.Label(
             perf_box,
@@ -352,6 +361,39 @@ class PlotWindow(tk.Toplevel):
             wraplength=230,
             justify=tk.LEFT,
         ).pack(anchor="w")
+
+        calc_box = ttk.LabelFrame(fft_content, text="What the spectrum calculation does", padding=6)
+        calc_box.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        calc_text = tk.Text(calc_box, height=12, width=34, wrap="word")
+        calc_text.pack(fill=tk.X)
+        calc_text.insert(
+            "1.0",
+            (
+                "For each selected BPM and signal expression z[n]:\n\n"
+                "1. Build complex phasor:\n"
+                "   z[n] = A+B+C+D, A, ...\n\n"
+                "2. Phase spectrum:\n"
+                "   phi_raw[n] = angle(z[n])\n"
+                "   phi[n] = unwrap(phi_raw[n])\n"
+                "   x[n] = detrend(phi[n])\n\n"
+                "3. Magnitude spectrum:\n"
+                "   m[n] = abs(z[n])\n"
+                "   x[n] = detrend(m[n])\n\n"
+                "4. FFT/PSD:\n"
+                "   xw[n] = window[n] * x[n]\n"
+                "   PSD[k] = |rfft(xw, nfft)|^2 / sum(window^2)\n\n"
+                "df Hz requests bin spacing: nfft = ceil(fs / df), at least the waveform length.\n"
+                "Actual df = fs / nfft, so it can be finer than requested.\n"
+                "500 Hz is a sensible first setting at fs=6.25 MHz.\n\n"
+                "max time points affects only raw trace drawing. FFTs and peak finding still use the full block.\n\n"
+                "Use the same FFT settings inside one plot window when comparing BPMs or Sum vs A. Open a second plot window to compare different analysis assumptions."
+            ),
+        )
+        calc_text.configure(state=tk.DISABLED)
+        self.fft_help_fig = Figure(figsize=(2.4, 1.5), dpi=100)
+        self.fft_help_canvas = FigureCanvasTkAgg(self.fft_help_fig, master=calc_box)
+        self.fft_help_canvas.get_tk_widget().pack(fill=tk.X, pady=(6, 0))
+        self.draw_fft_help()
 
         plot_frame = ttk.Frame(body)
         body.add(plot_frame, weight=1)
@@ -375,6 +417,32 @@ class PlotWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.status.set("Viewer ready. Click Refresh now, or leave Live on for the first scheduled read.")
         self.after_id = self.after(100, self.refresh)
+
+    def draw_fft_help(self) -> None:
+        fig = self.fft_help_fig
+        fig.clear()
+        ax1 = fig.add_subplot(131)
+        ax2 = fig.add_subplot(132)
+        ax3 = fig.add_subplot(133)
+        n = np.arange(128)
+        raw = np.angle(np.exp(1j * (0.08 * n + 0.5 * np.sin(2 * np.pi * 6 * n / n.size))))
+        unwrapped = np.unwrap(raw)
+        detrended = unwrapped - np.polyval(np.polyfit(n, unwrapped, 1), n)
+        windowed = detrended * np.hanning(n.size)
+        freq = np.fft.rfftfreq(n.size, d=1.0)
+        psd = np.abs(np.fft.rfft(windowed)) ** 2
+        ax1.plot(n, raw, color="#777777", linewidth=1.0)
+        ax1.set_title("angle")
+        ax2.plot(n, windowed, color="#1f77b4", linewidth=1.0)
+        ax2.set_title("windowed")
+        ax3.semilogy(freq, np.maximum(psd, 1e-12), color="#2ca02c", linewidth=1.0)
+        ax3.set_title("PSD")
+        for ax in (ax1, ax2, ax3):
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.grid(True, alpha=0.2)
+        fig.tight_layout(pad=0.5)
+        self.fft_help_canvas.draw_idle()
 
     def update_title(self) -> None:
         names = self.active_bpm_names()
@@ -1076,9 +1144,11 @@ class LatticeWindow(tk.Toplevel):
         self.show_beta_x = tk.BooleanVar(value=True)
         self.show_beta_y = tk.BooleanVar(value=True)
         self.show_dispersion = tk.BooleanVar(value=True)
+        self.show_dispersion_y = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text="beta x", variable=self.show_beta_x, command=self.draw).pack(side=tk.LEFT, padx=2)
         ttk.Checkbutton(top, text="beta y", variable=self.show_beta_y, command=self.draw).pack(side=tk.LEFT, padx=2)
         ttk.Checkbutton(top, text="Dx", variable=self.show_dispersion, command=self.draw).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(top, text="Dy", variable=self.show_dispersion_y, command=self.draw).pack(side=tk.LEFT, padx=2)
         self.show_labels = tk.BooleanVar(value=True)
         ttk.Checkbutton(top, text="Labels", variable=self.show_labels, command=self.draw).pack(side=tk.LEFT, padx=4)
         ttk.Label(top, text="Click BPM marker to open raw I/Q. Optics curves are basic model overlays until real lattice imports land.").pack(side=tk.LEFT, padx=12)
@@ -1109,6 +1179,10 @@ class LatticeWindow(tk.Toplevel):
             dispersion_handles.extend(
                 self.ax_dispersion.plot(s, optics["dispersion_x_m"], color="#2ca02c", linewidth=1.8, linestyle="--", label="Dx [m]")
             )
+        if self.show_dispersion_y.get():
+            dispersion_handles.extend(
+                self.ax_dispersion.plot(s, optics["dispersion_y_m"], color="#9467bd", linewidth=1.6, linestyle=":", label="Dy [m]")
+            )
         marker_y = np.zeros_like(s)
         points = self.ax.scatter(s, marker_y, marker="v", s=46, color="#222222", picker=True, pickradius=8, label="BPM")
         points._bpm_names = [b.name for b in bpms]  # type: ignore[attr-defined]
@@ -1119,7 +1193,7 @@ class LatticeWindow(tk.Toplevel):
                 self.ax.annotate(label, (bpm.s_m, y), fontsize=6, rotation=45, xytext=(2, 5), textcoords="offset points")
         self.ax.set_xlabel("s [m]")
         self.ax.set_ylabel("beta functions [m]")
-        self.ax_dispersion.set_ylabel("horizontal dispersion Dx [m]")
+        self.ax_dispersion.set_ylabel("dispersion [m]")
         self.ax.text(
             0.01,
             0.98,
@@ -1303,7 +1377,23 @@ class BPMViewer:
 
         strip_box = ttk.LabelFrame(main, text="BPM lattice overview", padding=4)
         strip_box.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        self.bpm_strip = tk.Canvas(strip_box, height=74, bg="#f6f6f6", highlightthickness=0)
+        strip_controls = ttk.Frame(strip_box)
+        strip_controls.pack(fill=tk.X, pady=(0, 3))
+        ttk.Label(strip_controls, text="Optics:").pack(side=tk.LEFT)
+        self.main_lattice_mode = tk.StringVar(value=OPTICS_MODE_LABELS["standard_user"])
+        ttk.Combobox(
+            strip_controls,
+            textvariable=self.main_lattice_mode,
+            values=[OPTICS_MODE_LABELS[key] for key in OPTICS_MODES],
+            state="readonly",
+            width=14,
+        ).pack(side=tk.LEFT, padx=(3, 8))
+        self.main_lattice_mode.trace_add("write", lambda *_args: self.draw_bpm_strip())
+        self.main_show_beta = tk.BooleanVar(value=True)
+        self.main_show_dispersion = tk.BooleanVar(value=True)
+        ttk.Checkbutton(strip_controls, text="beta x/y", variable=self.main_show_beta, command=self.draw_bpm_strip).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(strip_controls, text="Dx/Dy", variable=self.main_show_dispersion, command=self.draw_bpm_strip).pack(side=tk.LEFT, padx=2)
+        self.bpm_strip = tk.Canvas(strip_box, height=132, bg="#f8f8f8", highlightthickness=0)
         self.bpm_strip.pack(fill=tk.X, expand=True)
         self.bpm_strip.bind("<Configure>", lambda _e: self.draw_bpm_strip())
         self.bpm_strip.bind("<Button-1>", self.on_bpm_strip_click)
@@ -1416,10 +1506,37 @@ class BPMViewer:
             return
         width = max(canvas.winfo_width(), 640)
         margin = 32
-        y = 34
+        y = 82
         s_min = min(b.s_m for b in bpms)
         s_max = max(b.s_m for b in bpms)
         span = max(s_max - s_min, 1.0)
+        s = np.array([b.s_m for b in bpms], dtype=float)
+        xs = [margin + (value - s_min) / span * (width - 2 * margin) for value in s]
+        optics = basic_lattice_functions(s, canonical_optics_mode(self.main_lattice_mode.get()))
+
+        def curve_points(values: np.ndarray, top: float, bottom: float) -> List[float]:
+            arr = np.asarray(values, dtype=float)
+            finite = arr[np.isfinite(arr)]
+            if finite.size == 0 or np.nanmax(finite) == np.nanmin(finite):
+                scaled = np.full_like(arr, (top + bottom) / 2.0)
+            else:
+                scaled = bottom - (arr - np.nanmin(finite)) / (np.nanmax(finite) - np.nanmin(finite)) * (bottom - top)
+            points: List[float] = []
+            for x_val, y_val in zip(xs, scaled):
+                points.extend([float(x_val), float(y_val)])
+            return points
+
+        if self.main_show_beta.get() and len(xs) > 1:
+            canvas.create_line(*curve_points(optics["beta_x_m"], 18, 58), fill="#1f77b4", width=2, smooth=True)
+            canvas.create_line(*curve_points(optics["beta_y_m"], 18, 58), fill="#d62728", width=2, smooth=True)
+            canvas.create_text(margin, 18, text="beta x", anchor="w", fill="#1f77b4", font=("TkDefaultFont", 8))
+            canvas.create_text(margin + 54, 18, text="beta y", anchor="w", fill="#d62728", font=("TkDefaultFont", 8))
+        if self.main_show_dispersion.get() and len(xs) > 1:
+            canvas.create_line(*curve_points(optics["dispersion_x_m"], 90, 122), fill="#2ca02c", width=2, smooth=True)
+            canvas.create_line(*curve_points(optics["dispersion_y_m"], 90, 122), fill="#9467bd", width=2, smooth=True)
+            canvas.create_text(width - margin - 76, 106, text="Dx", anchor="w", fill="#2ca02c", font=("TkDefaultFont", 8))
+            canvas.create_text(width - margin - 42, 106, text="Dy", anchor="w", fill="#9467bd", font=("TkDefaultFont", 8))
+
         canvas.create_line(margin, y, width - margin, y, fill="#606060", width=2)
         visible = set(self.displayed_bpm_names)
         for bpm in bpms:
@@ -1434,7 +1551,7 @@ class BPMViewer:
             tag = f"bpm:{bpm.name}"
             canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=fill, outline=outline, width=2, tags=("bpm_marker", tag))
             canvas.create_text(x, y + 18, text=bpm.section if bpm.known_orbit_pvs else "", font=("TkDefaultFont", 7), fill="#404040")
-        canvas.create_text(margin, 10, text="Ring BPMs by lattice position. Blue = locally confirmed/known candidate. Click marker to open.", anchor="w", fill="#303030")
+        canvas.create_text(margin, 10, text="Ring BPMs by s. Basic optics overlay for BPM selection. Blue = confirmed candidate. Click marker to open.", anchor="w", fill="#303030")
 
     def on_bpm_strip_click(self, event) -> None:
         bpm = nearest_bpm_marker(event.x, event.y, self.strip_marker_positions)

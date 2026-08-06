@@ -15,7 +15,9 @@ The main window is a BPM picker:
 4. Use `Live` to keep reading periodically.
 5. Use `BPM overlays` to add or toggle BPMs in that plot.
 
-Use `Open lattice viewer` for the larger clickable lattice plot. It can overlay basic beta-x, beta-y, and horizontal-dispersion curves for standard user, low-alpha, and SSMB optics modes.
+The top lattice strip can overlay basic beta-x/beta-y and Dx/Dy curves for standard user, low-alpha, and SSMB optics modes. Use it as the normal first navigation surface: click a BPM marker to open that BPM.
+
+Use `Open lattice viewer` for the larger clickable lattice plot. It has the same optics modes with separate beta-x, beta-y, Dx, and Dy toggles.
 
 ## First Plot To Trust
 
@@ -52,6 +54,8 @@ Use `Freq` to switch spectrum x axes and tune/peak listings between `kHz`, `Hz`,
 Use `Refresh s` to control live update speed. The default is 3 seconds. Watch the `Load:` line in the plot window or the global `Performance:` line in the main window; if it says `LAGGING`, increase the interval, reduce active BPM overlays, or disable signals you do not need.
 
 If the window is short, use the left-pane tabs: `BPMs`, `Signals`, `Analysis`, and `FFT / perf`. The BPM overlay list scrolls independently.
+
+The `FFT / perf` tab explains the calculation from complex raw I/Q to phase and magnitude spectra, including `unwrap`, detrending, windowing, PSD, `df Hz`, and `max time points`. The tiny plots show the same pipeline visually. Keep these settings the same inside one plot window when comparing BPMs or signals; open another plot window if you want to compare a different FFT assumption.
 
 ## Tunes And Peaks
 

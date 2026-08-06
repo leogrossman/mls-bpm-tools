@@ -266,6 +266,7 @@ def basic_lattice_functions(s_m: Sequence[float], mode: str = "standard_user") -
             "beta_x_m": s.copy(),
             "beta_y_m": s.copy(),
             "dispersion_x_m": s.copy(),
+            "dispersion_y_m": s.copy(),
         }
     span = max(float(np.nanmax(s) - np.nanmin(s)), 1.0)
     u = (s - float(np.nanmin(s))) / span
@@ -276,20 +277,24 @@ def basic_lattice_functions(s_m: Sequence[float], mode: str = "standard_user") -
         beta_x = 8.5 + 2.4 * np.cos(2 * theta - 0.2) + 1.4 * np.cos(6 * theta)
         beta_y = 5.8 + 2.0 * np.sin(2 * theta + 0.7) + 0.9 * np.cos(8 * theta)
         dispersion = 0.55 + 0.34 * np.cos(4 * theta + 0.25) + 0.10 * np.sin(10 * theta)
+        dispersion_y = 0.025 * np.sin(4 * theta + 0.4)
     elif mode_key == "ssmb":
         beta_x = 6.8 + 2.8 * np.cos(2 * theta + 0.5) + 1.8 * np.sin(8 * theta)
         beta_y = 7.2 + 2.2 * np.sin(2 * theta - 0.4) + 1.2 * np.cos(6 * theta)
         dispersion = 0.18 + 0.12 * np.cos(4 * theta - 0.7) + 0.05 * np.sin(12 * theta)
+        dispersion_y = 0.018 * np.sin(6 * theta - 0.2)
     else:
         beta_x = 7.2 + 2.1 * np.cos(2 * theta) + 1.1 * np.cos(8 * theta)
         beta_y = 5.6 + 1.8 * np.sin(2 * theta + 0.8) + 0.8 * np.cos(6 * theta)
         dispersion = 0.32 + 0.20 * np.cos(4 * theta - 0.15) + 0.06 * np.sin(10 * theta)
+        dispersion_y = 0.015 * np.sin(4 * theta)
 
     return {
         "s_m": s,
         "beta_x_m": np.maximum(beta_x, 0.2),
         "beta_y_m": np.maximum(beta_y, 0.2),
         "dispersion_x_m": dispersion,
+        "dispersion_y_m": dispersion_y,
     }
 
 

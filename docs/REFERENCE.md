@@ -75,6 +75,9 @@ The lattice viewer shows clickable BPM markers at configured BPM positions and o
 - beta x
 - beta y
 - horizontal dispersion `Dx`
+- vertical dispersion `Dy`
+
+The main BPM picker includes a compact clickable lattice overlay with the same optics mode selector. The larger lattice viewer has separate beta/Dx/Dy toggles and a clearer two-axis plot.
 
 The mode selector includes `standard user`, `low alpha`, and `SSMB`. These are smooth built-in model overlays for orientation and BPM selection; they are not yet a replacement for imported, machine-approved optics tables. Use them to quickly find high-dispersion or beta-relevant BPM regions, then replace them with real optics exports when available.
 
@@ -87,10 +90,10 @@ FFT settings apply to the whole plot window, not to each BPM separately. That is
 - `detrend`: `linear` removes a slope and DC offset before the FFT. This is usually best for turn-by-turn phase because slow drift otherwise leaks into low-frequency bins.
 - `window`: `hann` is the default compromise for live spectra. `rectangular` preserves amplitude for exactly bin-centered tones but leaks more for off-bin lines.
 - `NFFT`: leave empty for automatic FFT length from `df Hz`; set manually only when testing a specific binning.
-- `df Hz`: desired frequency-bin spacing. Smaller values give finer bins but increase FFT work and can make the plot slower. `500 Hz` is a good starting point for the 6.25 MHz sample rate.
+- `df Hz`: requested frequency-bin spacing. The code uses `nfft = ceil(fs / df)` and never less than the waveform length, so the actual spacing is `fs / nfft` and can be finer than requested. Smaller values increase FFT work and can make the plot slower. `500 Hz` is a good starting point for the 6.25 MHz sample rate.
 - `max time points`: reduces only the number of raw points drawn. It does not change the FFT or peak-finding data.
 
-Change FFT settings per plot window when comparing different analysis assumptions. Keep them identical inside one plot window when comparing BPMs or Sum versus A.
+The FFT/perf tab also shows the calculation equations and a tiny angle/windowed/PSD schematic. Change FFT settings per plot window when comparing different analysis assumptions. Keep them identical inside one plot window when comparing BPMs or Sum versus A.
 
 ## Data Rate And Performance
 
