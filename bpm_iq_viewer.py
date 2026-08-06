@@ -395,9 +395,10 @@ class PlotWindow(tk.Toplevel):
         self.app = app
         self.bpm_names = list(bpm_names)
         self.title("BPM I/Q plots — " + ", ".join(self.bpm_names))
-        self.geometry("1180x760")
+        self.geometry("1320x820")
         self.running = True
         self.after_id: Optional[str] = None
+        self.bpm_enabled: Dict[str, tk.BooleanVar] = {}
 
         controls = ttk.Frame(self)
         controls.pack(side=tk.TOP, fill=tk.X, padx=6, pady=4)
@@ -426,13 +427,122 @@ class PlotWindow(tk.Toplevel):
         self.status = tk.StringVar(value="Ready")
         ttk.Label(self, textvariable=self.status, anchor="w").pack(fill=tk.X, padx=6)
 
+        body = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        side = ttk.Frame(body, padding=6)
+        body.add(side, weight=0)
+        bpm_box = ttk.LabelFrame(side, text="BPM overlays", padding=6)
+        bpm_box.pack(fill=tk.BOTH, expand=True)
+        add_row = ttk.Frame(bpm_box)
+        add_row.pack(fill=tk.X, pady=(0, 4))
+        self.add_bpm_var = tk.StringVar()
+        self.add_bpm_combo = ttk.Combobox(
+            add_row,
+            textvariable=self.add_bpm_var,
+            values=[bpm.name for bpm in self.app.cfg.bpms],
+            width=16,
+        )
+        self.add_bpm_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(add_row, text="Add", command=self.add_bpm_from_combo).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(bpm_box, text="Add main selection", command=self.add_main_selection).pack(fill=tk.X, pady=2)
+        toggle_row = ttk.Frame(bpm_box)
+        toggle_row.pack(fill=tk.X, pady=2)
+        ttk.Button(toggle_row, text="All on", command=lambda: self.set_all_bpms(True)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(toggle_row, text="All off", command=lambda: self.set_all_bpms(False)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        ttk.Button(bpm_box, text="Remove off", command=self.remove_disabled_bpms).pack(fill=tk.X, pady=2)
+        ttk.Separator(bpm_box).pack(fill=tk.X, pady=4)
+        self.bpm_rows = ttk.Frame(bpm_box)
+        self.bpm_rows.pack(fill=tk.BOTH, expand=True)
+
+        tune_box = ttk.LabelFrame(side, text="Spectrum markers", padding=6)
+        tune_box.pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(
+            tune_box,
+            text="Tunes are read only when the Tunes toggle is on or you click Refresh now.",
+            wraplength=210,
+            justify=tk.LEFT,
+        ).pack(anchor="w")
+
+        plot_frame = ttk.Frame(body)
+        body.add(plot_frame, weight=1)
         self.figure = Figure(figsize=(10, 7), dpi=100)
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        NavigationToolbar2Tk(self.canvas, self).update()
+        NavigationToolbar2Tk(self.canvas, plot_frame).update()
         self.last_data: Dict[str, Dict[str, np.ndarray]] = {}
         self.last_errors: Dict[str, str] = {}
+        for bpm in self.bpm_names:
+            self.add_bpm(bpm, refresh=False)
+        self.rebuild_bpm_rows()
         self.protocol("WM_DELETE_WINDOW", self.close)
+        self.refresh()
+
+    def update_title(self) -> None:
+        names = self.active_bpm_names()
+        suffix = ", ".join(names[:5]) + ("..." if len(names) > 5 else "")
+        self.title("BPM I/Q plots — " + (suffix or "no active BPMs"))
+
+    def rebuild_bpm_rows(self) -> None:
+        for child in self.bpm_rows.winfo_children():
+            child.destroy()
+        if not self.bpm_names:
+            ttk.Label(self.bpm_rows, text="No BPMs loaded.").pack(anchor="w")
+            return
+        for bpm in self.bpm_names:
+            info = self.app.bpm_by_name.get(bpm)
+            label = f"* {bpm}" if info and info.known_orbit_pvs else bpm
+            ttk.Checkbutton(
+                self.bpm_rows,
+                text=label,
+                variable=self.bpm_enabled[bpm],
+                command=self.refresh,
+            ).pack(anchor="w", fill=tk.X)
+        self.update_title()
+
+    def active_bpm_names(self) -> List[str]:
+        return [bpm for bpm in self.bpm_names if self.bpm_enabled.get(bpm, tk.BooleanVar(value=False)).get()]
+
+    def add_bpm(self, bpm: str, refresh: bool = True) -> None:
+        bpm = bpm.strip()
+        if not bpm:
+            return
+        if bpm not in self.app.bpm_by_name:
+            messagebox.showwarning("Unknown BPM", f"{bpm} is not in bpm_config.json.", parent=self)
+            return
+        if bpm not in self.bpm_names:
+            self.bpm_names.append(bpm)
+        if bpm not in self.bpm_enabled:
+            self.bpm_enabled[bpm] = tk.BooleanVar(value=True)
+        else:
+            self.bpm_enabled[bpm].set(True)
+        self.app.session.event("plot_bpm_added", bpm=bpm, bpms=self.bpm_names)
+        if refresh:
+            self.rebuild_bpm_rows()
+            self.refresh()
+
+    def add_bpm_from_combo(self) -> None:
+        self.add_bpm(self.add_bpm_var.get())
+
+    def add_main_selection(self) -> None:
+        names = self.app.selected_names()
+        if not names:
+            messagebox.showinfo("Select BPM", "Select BPMs in the main window first.", parent=self)
+            return
+        for bpm in names:
+            self.add_bpm(bpm, refresh=False)
+        self.rebuild_bpm_rows()
+        self.refresh()
+
+    def set_all_bpms(self, enabled: bool) -> None:
+        for var in self.bpm_enabled.values():
+            var.set(enabled)
+        self.refresh()
+
+    def remove_disabled_bpms(self) -> None:
+        self.bpm_names = [bpm for bpm in self.bpm_names if self.bpm_enabled[bpm].get()]
+        self.bpm_enabled = {bpm: self.bpm_enabled[bpm] for bpm in self.bpm_names}
+        self.rebuild_bpm_rows()
         self.refresh()
 
     def toggle_pause(self) -> None:
@@ -478,6 +588,8 @@ class PlotWindow(tk.Toplevel):
 
     def _refresh_impl(self) -> None:
         kind = self.plot_kind.get()
+        active_bpms = self.active_bpm_names()
+        self.update_title()
         self.figure.clear()
         if kind == "all":
             axes = [self.figure.add_subplot(221), self.figure.add_subplot(222), self.figure.add_subplot(223), self.figure.add_subplot(224)]
@@ -498,7 +610,16 @@ class PlotWindow(tk.Toplevel):
         self.last_data = {}
         self.last_errors = {}
         tune_markers = self.app.current_tune_markers(include_harmonics=self.show_harmonics.get()) if self.show_tunes.get() else []
-        for bpm in self.bpm_names:
+        if not active_bpms:
+            axes[0].text(
+                0.5,
+                0.5,
+                "No active BPM overlays.\nTurn on a BPM checkbox or add one.",
+                ha="center",
+                va="center",
+                transform=axes[0].transAxes,
+            )
+        for bpm in active_bpms:
             try:
                 phasors = read_button_phasors(self.app.backend, self.app.cfg, bpm, buttons_needed)
             except Exception as exc:
@@ -588,7 +709,7 @@ class PlotWindow(tk.Toplevel):
                     axes[2].set_title("phase")
                     axes[3].set_title("phase spectrum")
 
-        if not self.last_data:
+        if active_bpms and not self.last_data:
             axes[0].text(
                 0.5,
                 0.5,
@@ -624,7 +745,8 @@ class PlotWindow(tk.Toplevel):
         self.figure.tight_layout()
         self.canvas.draw_idle()
         suffix = f"; {len(self.last_errors)} error(s)" if self.last_errors else ""
-        self.status.set(f"Updated {time.strftime('%H:%M:%S')} - expression {self.expr.get()}{suffix}")
+        tune_suffix = f"; {len(tune_markers)} tune marker(s)" if tune_markers else ""
+        self.status.set(f"Updated {time.strftime('%H:%M:%S')} - {len(active_bpms)} BPM(s), expression {self.expr.get()}{tune_suffix}{suffix}")
 
     def _draw_tune_markers(self, ax, markers: Sequence[Tuple[float, str, str]]) -> None:
         ymin, ymax = ax.get_ylim()

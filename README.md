@@ -220,11 +220,13 @@ For now these are read-only. Later, write controls can be added behind explicit 
 6. Use `A+B+C+D` for common mode.
 7. Try `spectra` to see phase and magnitude spectra together.
 8. Toggle `Tunes` and `Harmonics` in plot windows to overlay live tune marker lines.
-9. Enter multiple expressions separated by semicolons, for example `A+B+C+D; A-B; (A+B)-(C+D)`.
-10. Try difference expressions only as uncalibrated diagnostics until button geometry is confirmed.
-11. Open the lattice view to select BPMs by ring position and candidate `rdX`/`rdY` PV names.
-12. Use `PV probe / edit IDs` when a PV looks wrong, then click `Save config`.
-13. Check logs after any red PV status or plot error.
+9. Use the `BPM overlays` panel in each plot window to add BPMs, add the main-window selection, and toggle individual BPM traces on/off without closing the viewer.
+10. Use the Matplotlib toolbar under the plot to pan, zoom, and move around spectra or turn-by-turn traces.
+11. Enter multiple expressions separated by semicolons, for example `A+B+C+D; A-B; (A+B)-(C+D)`.
+12. Try difference expressions only as uncalibrated diagnostics until button geometry is confirmed.
+13. Open the lattice view to select BPMs by ring position and candidate `rdX`/`rdY` PV names.
+14. Use `PV probe / edit IDs` when a PV looks wrong, then click `Save config`.
+15. Check logs after any red PV status or plot error.
 
 Useful expressions:
 
