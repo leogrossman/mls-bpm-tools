@@ -1,0 +1,46 @@
+{
+  "sample_rate_hz": 6250000.0,
+  "ddc_frequency_hz": null,
+  "refresh_ms": 1000,
+  "pv_templates": {
+    "scan": "{bpm}:signals:ddc_raw.SCAN",
+    "i": "{bpm}:signals:ddc_raw.I{button}",
+    "q": "{bpm}:signals:ddc_raw.Q{button}"
+  },
+  "status_pvs": [
+    {
+      "label": "Phase noise generator",
+      "pv": "TODO:PHASE:NOISE:ENABLE",
+      "on_values": ["1", "ON", "On", "on", "Enabled"],
+      "direction": "longitudinal",
+      "excitation": "phase noise"
+    },
+    {
+      "label": "Horizontal excitation",
+      "pv": "TODO:H:NOISE:ENABLE",
+      "on_values": ["1", "ON", "On", "on", "Enabled"],
+      "direction": "x",
+      "excitation": "noise/kick"
+    },
+    {
+      "label": "Vertical excitation",
+      "pv": "TODO:V:NOISE:ENABLE",
+      "on_values": ["1", "ON", "On", "on", "Enabled"],
+      "direction": "y",
+      "excitation": "noise/kick"
+    },
+    {
+      "label": "Excitation type",
+      "pv": "TODO:EXCITATION:TYPE",
+      "on_values": ["phase", "amplitude", "chirp"],
+      "direction": "all",
+      "excitation": "type readback"
+    }
+  ],
+  "bpms": [
+    {"name": "BPMZ1L2RP", "s_m": 0.0, "dispersion_x_m": 0.0, "beta_x_m": 0.0, "beta_y_m": 0.0, "modes": ["user", "low_alpha"]},
+    {"name": "BPM_PLACEHOLDER_02", "s_m": 6.0, "dispersion_x_m": 0.18, "beta_x_m": 0.0, "beta_y_m": 0.0, "modes": ["user", "low_alpha"]},
+    {"name": "BPM_PLACEHOLDER_03", "s_m": 12.0, "dispersion_x_m": 0.32, "beta_x_m": 0.0, "beta_y_m": 0.0, "modes": ["user", "low_alpha"]},
+    {"name": "BPM_PLACEHOLDER_04", "s_m": 18.0, "dispersion_x_m": 0.05, "beta_x_m": 0.0, "beta_y_m": 0.0, "modes": ["user", "low_alpha"]}
+  ]
+}
