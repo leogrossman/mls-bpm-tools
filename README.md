@@ -16,6 +16,7 @@ python3 bpm_iq_viewer.py --safe
 
 - live EPICS reads are allowed
 - machine writes are blocked
+- optional tune/noise/status PVs are not read during GUI startup
 - missing/broken PVs should not crash the GUI
 - scalar tune/noise/status PVs use a short timeout so bad candidates fail fast
 - logs are written for later debugging
@@ -66,7 +67,7 @@ Runtime packages:
 - `pyepics`
 - `tkinter`
 
-The default config uses a 2.0 s timeout for raw waveform reads and a 0.25 s timeout for scalar tune/status/noise readbacks. This is meant to keep bad noise-generator PV candidates from stalling `--safe` startup.
+The default config uses a 2.0 s timeout for raw waveform reads and a 0.25 s timeout for scalar tune/status/noise readbacks. Optional status rows are skipped until you click `Refresh status PVs`, so a bad candidate like an unconfirmed `BBQRP:*:DRIVEO` ID should not stop the main window from opening.
 
 ## Logs
 
@@ -93,6 +94,21 @@ Use another log location if needed:
 ```bash
 python3 bpm_iq_viewer.py --safe --log-dir /path/to/logs
 ```
+
+## PV Probe And Editable IDs
+
+Use `PV probe / edit IDs` in the GUI to generate likely PV names for the selected BPMs and run read-only checks. It can probe raw waveform names, tune/status names, and orbit readback candidates. Results are also written to `events.jsonl`.
+
+Equivalent shell checks on the control-room machine are:
+
+```bash
+cainfo BPMZ1L2RP:signals:ddc_raw.Ia
+caget -t BPMZ1L2RP:signals:ddc_raw.Ia
+cainfo TUNEZRP:measX
+caget -t WFGEN2C1CP:stOut
+```
+
+If an ID is wrong, edit it in the GUI table or in `bpm_config.json`, then click `Save config`. The GUI stores the corrected names back to the config file used by the one-command startup.
 
 ## EPICS PV Manual
 
@@ -182,7 +198,7 @@ BBQRP:Y:DRIVEO
 BBQRP:Z:DRIVEO
 ```
 
-`WFGEN2C1CP:setVolt`, `WFGEN2C1CP:stOut`, `WFGENC1CP:rdVolt`, and the `TUNEZRP:*` tune PVs appear in the local `betagui`/CS-Studio material. `WFGEN1C1CP:*`, `WFGENC1CP:stOut`, and `BBQRP:*:DRIVEO` are editable candidates based on the requested control-room names and should be confirmed live.
+`WFGEN2C1CP:setVolt`, `WFGEN2C1CP:stOut`, `WFGENC1CP:rdVolt`, and the `TUNEZRP:*` tune PVs appear in the local `betagui`/CS-Studio material. `WFGEN1C1CP:*`, `WFGENC1CP:stOut`, and `BBQRP:*:DRIVEO` are editable candidates based on the requested control-room names and are disabled by default until confirmed live.
 
 Use these rows for read-only indication of:
 
@@ -196,7 +212,7 @@ For now these are read-only. Later, write controls can be added behind explicit 
 ## GUI Use
 
 1. Start with `python3 bpm_iq_viewer.py --safe`.
-2. Select one BPM, for example `BPMZ1L2RP`.
+2. Select one BPM, for example `BPMZ1L2RP`, or click `Select known BPMs`. Starred BPMs have orbit PV names seen in local `betagui`/CS-Studio material.
 3. Open a plot window.
 4. First inspect individual buttons with expressions `A`, `B`, `C`, `D`.
 5. Use `raw buttons` plot mode to compare all I/Q traces.
@@ -206,7 +222,8 @@ For now these are read-only. Later, write controls can be added behind explicit 
 9. Enter multiple expressions separated by semicolons, for example `A+B+C+D; A-B; (A+B)-(C+D)`.
 10. Try difference expressions only as uncalibrated diagnostics until button geometry is confirmed.
 11. Open the lattice view to select BPMs by ring position and candidate `rdX`/`rdY` PV names.
-12. Check logs after any red PV status or plot error.
+12. Use `PV probe / edit IDs` when a PV looks wrong, then click `Save config`.
+13. Check logs after any red PV status or plot error.
 
 Useful expressions:
 

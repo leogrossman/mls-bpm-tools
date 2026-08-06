@@ -61,9 +61,10 @@ The main window provides:
 4. Preview the exact write commands without executing them.
 5. Open a simple clickable lattice view.
 6. Edit the raw BPM PV templates from the GUI if the configured names are wrong.
-7. Poll configured read-only excitation/status PVs with green/gray/red status lamps.
-8. Overlay live tune markers and harmonics from `TUNEZRP:measX`, `TUNEZRP:measY`, and `TUNEZRP:measZ` on spectrum plots.
-9. Enter multiple expressions separated by semicolons to compare several combinations at once.
+7. Open `PV probe / edit IDs` to generate and check read-only PV candidates with `caget`/`cainfo`.
+8. Poll enabled read-only excitation/status PVs with green/gray/red status lamps.
+9. Overlay live tune markers and harmonics from `TUNEZRP:measX`, `TUNEZRP:measY`, and `TUNEZRP:measZ` on spectrum plots.
+10. Enter multiple expressions separated by semicolons to compare several combinations at once.
 
 Every plot window updates independently and allows an expression such as:
 
@@ -111,7 +112,7 @@ Use `--log-dir /path/to/logs` if the control-room copy should store logs somewhe
 
 Broken or missing PVs should not crash the GUI. Plot windows skip the affected BPM for that refresh, show an error count, and write the failing BPM/expression/PV context to the logs. Status PVs turn red and record the exception in `events.jsonl`.
 
-Scalar tune/status/noise PVs use the shorter `epics_scalar_timeout_s` from `bpm_config.json` (default `0.25 s`) so a bad noise-generator candidate does not stall safe-mode startup for long. Raw waveform arrays use `epics_array_timeout_s` (default `2.0 s`).
+Scalar tune/status/noise PVs use the shorter `epics_scalar_timeout_s` from `bpm_config.json` (default `0.25 s`). Optional tune/status rows are not read at GUI startup; click `Refresh status PVs` or enable tune markers in a spectrum plot when you actually want those readbacks. Raw waveform arrays use `epics_array_timeout_s` (default `2.0 s`).
 
 ## EPICS mapping
 
@@ -159,7 +160,18 @@ BBQRP:Y:DRIVEO
 BBQRP:Z:DRIVEO
 ```
 
-Some of these are confirmed from local `betagui`/CS-Studio material (`WFGEN2C1CP:*`, `WFGENC1CP:rdVolt`, `TUNEZRP:*`); the rest are editable candidates that should be confirmed on the machine.
+Some of these are confirmed from local `betagui`/CS-Studio material (`WFGEN2C1CP:*`, `WFGENC1CP:rdVolt`, `TUNEZRP:*`); the rest are editable candidates that should be confirmed on the machine. The unconfirmed `BBQRP:*:DRIVEO` candidates are disabled by default so they cannot block safe-mode startup.
+
+Read-only PV discovery commands:
+
+```bash
+cainfo BPMZ1L2RP:signals:ddc_raw.Ia
+caget -t BPMZ1L2RP:signals:ddc_raw.Ia
+cainfo BBQRP:X:DRIVEO
+caget -t TUNEZRP:measX
+```
+
+The GUI PV probe runs the same kind of checks and logs every OK/error result. Edit wrong IDs in the table, click `Save config`, and rerun `python3 bpm_iq_viewer.py --safe`.
 
 ## Physics: what one complex BPM value means
 

@@ -90,8 +90,28 @@ class BPMIQViewerTest(unittest.TestCase):
 
         self.assertGreaterEqual(len(cfg.bpms), 28)
         self.assertTrue(any(bpm.name == "BPMZ1L2RP" and bpm.x_pv == "BPMZ1L2RP:rdX" for bpm in cfg.bpms))
+        self.assertTrue(any(bpm.name == "BPMZ3L2RP" and bpm.known_orbit_pvs for bpm in cfg.bpms))
         self.assertEqual([item.pv for item in cfg.tune_pvs], ["TUNEZRP:measX", "TUNEZRP:measY", "TUNEZRP:measZ"])
+        self.assertFalse(next(item for item in cfg.status_pvs if item.pv == "BBQRP:X:DRIVEO").enabled)
+        self.assertTrue(next(item for item in cfg.status_pvs if item.pv == "WFGEN2C1CP:stOut").enabled)
         self.assertLessEqual(cfg.epics_scalar_timeout_s, 0.5)
+
+    def test_config_save_roundtrip_keeps_runtime_pv_edits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(__file__).with_name("bpm_config.json")
+            path = Path(tmp) / "config.json"
+            path.write_text(src.read_text())
+            cfg = AppConfig.load(path)
+            cfg.status_pvs[0].pv = "TEST:EDITED"
+            cfg.status_pvs[0].enabled = False
+            cfg.bpms[0].known_orbit_pvs = True
+            cfg.save()
+
+            reloaded = AppConfig.load(path)
+
+        self.assertEqual(reloaded.status_pvs[0].pv, "TEST:EDITED")
+        self.assertFalse(reloaded.status_pvs[0].enabled)
+        self.assertTrue(reloaded.bpms[0].known_orbit_pvs)
 
     def test_spectrum_peak_near_known_signal(self):
         fs = 1000.0

@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -98,6 +99,7 @@ class BPMInfo:
     beta_y_m: float = math.nan
     x_pv: str = ""
     y_pv: str = ""
+    known_orbit_pvs: bool = False
     modes: List[str] = field(default_factory=lambda: ["user", "low_alpha"])
 
 
@@ -108,6 +110,7 @@ class StatusPV:
     on_values: List[str] = field(default_factory=lambda: ["1", "ON", "On", "on"])
     direction: str = ""
     excitation: str = ""
+    enabled: bool = True
 
 
 @dataclass
@@ -117,6 +120,7 @@ class TunePV:
     color: str
     unit: str = "auto"
     harmonics: int = 4
+    enabled: bool = True
 
 
 class SessionLogger:
@@ -148,6 +152,7 @@ class AppConfig:
     refresh_ms: int = 1000
     epics_array_timeout_s: float = 2.0
     epics_scalar_timeout_s: float = 0.25
+    source_path: Optional[Path] = None
 
     @classmethod
     def load(cls, path: Path) -> "AppConfig":
@@ -163,7 +168,29 @@ class AppConfig:
             refresh_ms=int(raw.get("refresh_ms", 1000)),
             epics_array_timeout_s=float(raw.get("epics_array_timeout_s", 2.0)),
             epics_scalar_timeout_s=float(raw.get("epics_scalar_timeout_s", 0.25)),
+            source_path=path,
         )
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "sample_rate_hz": self.sample_rate_hz,
+            "ddc_frequency_hz": self.ddc_frequency_hz,
+            "refresh_ms": self.refresh_ms,
+            "epics_array_timeout_s": self.epics_array_timeout_s,
+            "epics_scalar_timeout_s": self.epics_scalar_timeout_s,
+            "pv_templates": self.pv_templates,
+            "tune_pvs": [item.__dict__ for item in self.tune_pvs],
+            "status_pvs": [item.__dict__ for item in self.status_pvs],
+            "bpms": [item.__dict__ for item in self.bpms],
+        }
+
+    def save(self, path: Optional[Path] = None) -> Path:
+        target = path or self.source_path
+        if target is None:
+            raise RuntimeError("No config path is known")
+        target.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        self.source_path = target
+        return target
 
 
 class Backend:
@@ -185,7 +212,10 @@ class EpicsBackend(Backend):
         self.scalar_timeout = scalar_timeout
 
     def get_array(self, pv: str) -> np.ndarray:
-        value = epics.caget(pv, timeout=self.array_timeout)
+        try:
+            value = epics.caget(pv, timeout=self.array_timeout, connection_timeout=self.array_timeout)
+        except TypeError:
+            value = epics.caget(pv, timeout=self.array_timeout)
         if value is None:
             raise RuntimeError(f"No value returned from {pv}")
         arr = np.asarray(value, dtype=float).ravel()
@@ -194,7 +224,10 @@ class EpicsBackend(Backend):
         return arr
 
     def get_value(self, pv: str) -> object:
-        value = epics.caget(pv, timeout=self.scalar_timeout)
+        try:
+            value = epics.caget(pv, timeout=self.scalar_timeout, connection_timeout=self.scalar_timeout)
+        except TypeError:
+            value = epics.caget(pv, timeout=self.scalar_timeout)
         if value is None:
             raise RuntimeError(f"No value returned from {pv}")
         return value
@@ -664,6 +697,120 @@ class LatticeWindow(tk.Toplevel):
         PlotWindow(self.app, [bpm])
 
 
+class PVProbeWindow(tk.Toplevel):
+    def __init__(self, app: "BPMViewer"):
+        super().__init__(app.root)
+        self.app = app
+        self.title("Read-only PV probe / config helper")
+        self.geometry("1000x650")
+
+        top = ttk.Frame(self, padding=8)
+        top.pack(fill=tk.X)
+        ttk.Label(top, text="Paste or generate PVs, then probe them with short read-only timeouts.").pack(side=tk.LEFT)
+        ttk.Button(top, text="Load selected BPM PVs", command=self.load_selected_bpm_pvs).pack(side=tk.RIGHT, padx=3)
+        ttk.Button(top, text="Load tune/status PVs", command=self.load_status_pvs).pack(side=tk.RIGHT, padx=3)
+
+        split = ttk.PanedWindow(self, orient=tk.VERTICAL)
+        split.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        input_frame = ttk.LabelFrame(split, text="PV names to query", padding=6)
+        self.input_text = tk.Text(input_frame, height=12)
+        self.input_text.pack(fill=tk.BOTH, expand=True)
+        split.add(input_frame, weight=1)
+
+        actions = ttk.Frame(self, padding=(8, 0, 8, 8))
+        actions.pack(fill=tk.X)
+        ttk.Button(actions, text="caget probe", command=self.probe_caget).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions, text="cainfo probe", command=self.probe_cainfo).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions, text="Save current config", command=self.app.save_config).pack(side=tk.RIGHT, padx=3)
+
+        output_frame = ttk.LabelFrame(split, text="Probe results", padding=6)
+        self.output_text = tk.Text(output_frame, height=16)
+        self.output_text.pack(fill=tk.BOTH, expand=True)
+        split.add(output_frame, weight=2)
+
+        self.load_selected_bpm_pvs()
+
+    def _input_pvs(self) -> List[str]:
+        pvs = []
+        for line in self.input_text.get("1.0", tk.END).splitlines():
+            pv = line.strip()
+            if pv and not pv.startswith("#"):
+                pvs.append(pv)
+        return pvs
+
+    def _replace_input(self, pvs: Sequence[str]) -> None:
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert("1.0", "\n".join(dict.fromkeys(pvs)))
+
+    def _append_output(self, text: str) -> None:
+        self.output_text.insert(tk.END, text + "\n")
+        self.output_text.see(tk.END)
+
+    def load_selected_bpm_pvs(self) -> None:
+        names = self.app.selected_names() or [bpm.name for bpm in self.app.known_bpms()]
+        pvs: List[str] = []
+        for bpm in names:
+            pvs.append(pv_for(self.app.cfg, bpm, "scan"))
+            for button in BUTTONS:
+                pvs.append(pv_for(self.app.cfg, bpm, "i", button))
+                pvs.append(pv_for(self.app.cfg, bpm, "q", button))
+            info = self.app.bpm_by_name.get(bpm)
+            if info:
+                pvs.extend([pv for pv in (info.x_pv, info.y_pv) if pv])
+        self._replace_input(pvs)
+
+    def load_status_pvs(self) -> None:
+        self.app.sync_runtime_config()
+        pvs = [item.pv for item in self.app.cfg.tune_pvs if item.pv]
+        pvs.extend(item.pv for item in self.app.cfg.status_pvs if item.pv)
+        self._replace_input(pvs)
+
+    def probe_caget(self) -> None:
+        self.app.sync_runtime_config()
+        pvs = self._input_pvs()
+        self._append_output(f"\n# caget probe {time.strftime('%H:%M:%S')} ({len(pvs)} PVs)")
+        for pv in pvs:
+            try:
+                value = self.app.backend.get_value(pv)
+                text = str(value)
+                if len(text) > 180:
+                    text = text[:177] + "..."
+                self._append_output(f"OK   {pv} = {text}")
+                self.app.session.event("pv_probe_ok", method="caget", pv=pv, value=text)
+            except Exception as exc:
+                message = str(exc)
+                self._append_output(f"ERR  {pv}: {message}")
+                self.app.session.event("pv_probe_error", method="caget", pv=pv, error=message)
+
+    def probe_cainfo(self) -> None:
+        pvs = self._input_pvs()
+        timeout = max(self.app.cfg.epics_scalar_timeout_s + 0.5, 0.75)
+        self._append_output(f"\n# cainfo probe {time.strftime('%H:%M:%S')} ({len(pvs)} PVs)")
+        for pv in pvs:
+            try:
+                result = subprocess.run(
+                    ["cainfo", pv],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+                output = (result.stdout or result.stderr).strip().replace("\n", " | ")
+                if len(output) > 260:
+                    output = output[:257] + "..."
+                prefix = "OK" if result.returncode == 0 else f"ERR({result.returncode})"
+                self._append_output(f"{prefix:<8} {pv}: {output}")
+                self.app.session.event("pv_probe_cainfo", pv=pv, returncode=result.returncode, output=output)
+            except FileNotFoundError:
+                self._append_output("ERR      cainfo command not found in PATH")
+                break
+            except Exception as exc:
+                message = str(exc)
+                self._append_output(f"ERR      {pv}: {message}")
+                self.app.session.event("pv_probe_error", method="cainfo", pv=pv, error=message)
+
+
 class BPMViewer:
     def __init__(
         self,
@@ -687,6 +834,8 @@ class BPMViewer:
         self._last_status_values: Dict[str, str] = {}
         self._tune_values: Dict[str, Dict[str, object]] = {}
         self._last_tune_values: Dict[str, str] = {}
+        self.bpm_by_name = {bpm.name: bpm for bpm in self.cfg.bpms}
+        self.displayed_bpm_names: List[str] = []
 
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
@@ -705,13 +854,17 @@ class BPMViewer:
         buttons = ttk.Frame(main)
         buttons.grid(row=2, column=1, sticky="new", padx=(10, 0))
         ttk.Button(buttons, text="Open selected plot", command=self.open_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Select known BPMs", command=self.select_known_bpms).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
         ttk.Button(buttons, text="Enable selected BPM(s)…", command=self.enable_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Enable ALL BPMs…", command=self.enable_all).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
         ttk.Button(buttons, text="Show planned enable commands", command=self.preview_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Refresh status PVs", command=self.refresh_status_pvs).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Save config", command=self.save_config).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Help / guide", command=self.show_help).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Quit", command=root.destroy).pack(fill=tk.X, pady=2)
 
         pv_box = ttk.LabelFrame(main, text="Editable PV templates", padding=8)
@@ -727,12 +880,12 @@ class BPMViewer:
 
         self.tune_frame = ttk.LabelFrame(main, text="Read-only tune PVs for spectrum markers", padding=8)
         self.tune_frame.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        self.tune_rows: List[Tuple[TunePV, tk.StringVar, tk.Label]] = []
+        self.tune_rows: List[Tuple[TunePV, tk.StringVar, tk.Label, tk.BooleanVar, tk.StringVar]] = []
         self.build_tune_rows()
 
         self.status_pv_frame = ttk.LabelFrame(main, text="Read-only excitation / status PVs", padding=8)
         self.status_pv_frame.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        self.status_pv_rows: List[Tuple[StatusPV, tk.StringVar, tk.Label]] = []
+        self.status_pv_rows: List[Tuple[StatusPV, tk.StringVar, tk.Label, tk.BooleanVar, tk.StringVar]] = []
         self.build_status_pv_rows()
 
         info = ttk.LabelFrame(main, text="Combination examples", padding=8)
@@ -754,27 +907,43 @@ class BPMViewer:
 
         main.rowconfigure(2, weight=1)
         main.columnconfigure(0, weight=1)
-        self.refresh_tunes()
-        self.refresh_status_pvs()
+        self.status.set(f"{mode_label}. Optional tune/status PVs are not read on startup; click Refresh or open a spectrum.")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def populate_bpms(self) -> None:
         q = self.search.get().strip().lower()
         self.listbox.delete(0, tk.END)
+        self.displayed_bpm_names = []
         for bpm in self.cfg.bpms:
             if not q or q in bpm.name.lower():
-                self.listbox.insert(tk.END, bpm.name)
+                marker = "*" if bpm.known_orbit_pvs else " "
+                orbit = " orbit-ok" if bpm.known_orbit_pvs else ""
+                display = f"{marker} {bpm.name:<10} {bpm.section:<3}{orbit}"
+                self.listbox.insert(tk.END, display)
+                self.displayed_bpm_names.append(bpm.name)
 
     def select_bpm(self, bpm: str) -> None:
-        for i in range(self.listbox.size()):
-            if self.listbox.get(i) == bpm:
+        for i, name in enumerate(self.displayed_bpm_names):
+            if name == bpm:
                 self.listbox.selection_clear(0, tk.END)
                 self.listbox.selection_set(i)
                 self.listbox.see(i)
                 break
 
     def selected_names(self) -> List[str]:
-        return [self.listbox.get(i) for i in self.listbox.curselection()]
+        return [self.displayed_bpm_names[i] for i in self.listbox.curselection()]
+
+    def known_bpms(self) -> List[BPMInfo]:
+        known = [bpm for bpm in self.cfg.bpms if bpm.known_orbit_pvs]
+        return known or self.cfg.bpms[:4]
+
+    def select_known_bpms(self) -> None:
+        targets = {bpm.name for bpm in self.known_bpms()}
+        self.listbox.selection_clear(0, tk.END)
+        for index, name in enumerate(self.displayed_bpm_names):
+            if name in targets:
+                self.listbox.selection_set(index)
+        self.status.set(f"Selected {len(targets)} known BPM candidate(s). Starred BPMs have orbit PVs seen in betagui/CS-Studio material.")
 
     def open_selected(self) -> None:
         names = self.selected_names()
@@ -800,6 +969,52 @@ class BPMViewer:
         self.session.event("pv_templates_updated", templates=candidate)
         self.status.set("PV templates updated for newly refreshed/opened plots.")
 
+    def sync_runtime_config(self) -> None:
+        self.cfg.pv_templates.update({key: var.get().strip() for key, var in self.pv_template_vars.items()})
+        for item, _value_var, _lamp, enabled_var, pv_var in self.tune_rows:
+            item.enabled = bool(enabled_var.get())
+            item.pv = pv_var.get().strip()
+        for item, _value_var, _lamp, enabled_var, pv_var in self.status_pv_rows:
+            item.enabled = bool(enabled_var.get())
+            item.pv = pv_var.get().strip()
+
+    def save_config(self) -> None:
+        try:
+            self.sync_runtime_config()
+            path = self.cfg.save()
+            self.session.event("config_saved", path=str(path))
+            self.status.set(f"Saved config: {path}")
+            messagebox.showinfo("Config saved", f"Saved editable PV IDs to:\n{path}", parent=self.root)
+        except Exception as exc:
+            message = str(exc)
+            self.session.event("config_save_error", error=message)
+            messagebox.showerror("Config save failed", message, parent=self.root)
+
+    def show_help(self) -> None:
+        text = (
+            "Quick control-room flow\n\n"
+            "1. Start safe: python3 bpm_iq_viewer.py --safe\n"
+            "2. Select one or more BPMs. Starred BPMs are known from local betagui / CS-Studio material.\n"
+            "3. Click Open selected plot. Use semicolon-separated expressions to overlay traces, e.g. A; B; C; D; A+B+C+D.\n"
+            "4. For spectra, enable tune markers in the plot window. Tune PVs are read only when requested.\n"
+            "5. If a PV is wrong, edit it in the table or PV probe, then Save config.\n"
+            "6. Enable BPM logging only after reviewing Show planned enable commands. In --safe mode writes are blocked.\n\n"
+            "Useful raw PV pattern\n"
+            "{bpm}:signals:ddc_raw.SCAN = enable/scan control\n"
+            "{bpm}:signals:ddc_raw.Ia/Qa ... Id/Qd = raw complex button turns\n\n"
+            "Math hints\n"
+            "A+B+C+D is common mode / charge / arrival phase candidate.\n"
+            "(A+B)-(C+D) and (A+D)-(B+C) are uncalibrated transverse-like differences; adapt signs to real button geometry.\n"
+            "Magnitude spectra use |phasor|; phase spectra use unwrap(angle(phasor))."
+        )
+        win = tk.Toplevel(self.root)
+        win.title("BPM I/Q viewer help")
+        win.geometry("760x560")
+        box = tk.Text(win, wrap="word")
+        box.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        box.insert("1.0", text)
+        box.configure(state=tk.DISABLED)
+
     def build_status_pv_rows(self) -> None:
         for child in self.status_pv_frame.winfo_children():
             child.destroy()
@@ -807,23 +1022,25 @@ class BPMViewer:
         if not self.cfg.status_pvs:
             ttk.Label(self.status_pv_frame, text="No status PVs configured yet. Add status_pvs entries in bpm_config.json.").grid(row=0, column=0, sticky="w")
             return
-        headers = ("Status", "Label", "PV", "Direction", "Excitation", "Value")
+        headers = ("Use", "Status", "Label", "PV", "Direction", "Excitation", "Value")
         for col, text in enumerate(headers):
             ttk.Label(self.status_pv_frame, text=text).grid(row=0, column=col, sticky="w", padx=3)
         for row, item in enumerate(self.cfg.status_pvs, start=1):
+            enabled_var = tk.BooleanVar(value=item.enabled)
+            ttk.Checkbutton(self.status_pv_frame, variable=enabled_var).grid(row=row, column=0, sticky="w", padx=3)
             lamp = tk.Label(self.status_pv_frame, text="?", width=3, relief=tk.GROOVE, bg="#d9d9d9")
-            lamp.grid(row=row, column=0, sticky="w", padx=3, pady=1)
-            value_var = tk.StringVar(value="not read")
+            lamp.grid(row=row, column=1, sticky="w", padx=3, pady=1)
+            value_var = tk.StringVar(value="not read" if item.enabled else "disabled")
             pv_var = tk.StringVar(value=item.pv)
-            ttk.Label(self.status_pv_frame, text=item.label).grid(row=row, column=1, sticky="w", padx=3)
+            ttk.Label(self.status_pv_frame, text=item.label).grid(row=row, column=2, sticky="w", padx=3)
             entry = ttk.Entry(self.status_pv_frame, textvariable=pv_var, width=34)
-            entry.grid(row=row, column=2, sticky="ew", padx=3)
+            entry.grid(row=row, column=3, sticky="ew", padx=3)
             entry.bind("<FocusOut>", lambda _e, cfg=item, var=pv_var: setattr(cfg, "pv", var.get().strip()))
-            ttk.Label(self.status_pv_frame, text=item.direction).grid(row=row, column=3, sticky="w", padx=3)
-            ttk.Label(self.status_pv_frame, text=item.excitation).grid(row=row, column=4, sticky="w", padx=3)
-            ttk.Label(self.status_pv_frame, textvariable=value_var).grid(row=row, column=5, sticky="w", padx=3)
-            self.status_pv_rows.append((item, value_var, lamp))
-        self.status_pv_frame.columnconfigure(2, weight=1)
+            ttk.Label(self.status_pv_frame, text=item.direction).grid(row=row, column=4, sticky="w", padx=3)
+            ttk.Label(self.status_pv_frame, text=item.excitation).grid(row=row, column=5, sticky="w", padx=3)
+            ttk.Label(self.status_pv_frame, textvariable=value_var).grid(row=row, column=6, sticky="w", padx=3)
+            self.status_pv_rows.append((item, value_var, lamp, enabled_var, pv_var))
+        self.status_pv_frame.columnconfigure(3, weight=1)
 
     def build_tune_rows(self) -> None:
         for child in self.tune_frame.winfo_children():
@@ -832,25 +1049,33 @@ class BPMViewer:
         if not self.cfg.tune_pvs:
             ttk.Label(self.tune_frame, text="No tune PVs configured.").grid(row=0, column=0, sticky="w")
             return
-        headers = ("Status", "Label", "PV", "Unit", "Value")
+        headers = ("Use", "Status", "Label", "PV", "Unit", "Value")
         for col, text in enumerate(headers):
             ttk.Label(self.tune_frame, text=text).grid(row=0, column=col, sticky="w", padx=3)
         for row, item in enumerate(self.cfg.tune_pvs, start=1):
+            enabled_var = tk.BooleanVar(value=item.enabled)
+            ttk.Checkbutton(self.tune_frame, variable=enabled_var).grid(row=row, column=0, sticky="w", padx=3)
             lamp = tk.Label(self.tune_frame, text="?", width=3, relief=tk.GROOVE, bg="#d9d9d9")
-            lamp.grid(row=row, column=0, sticky="w", padx=3, pady=1)
-            value_var = tk.StringVar(value="not read")
+            lamp.grid(row=row, column=1, sticky="w", padx=3, pady=1)
+            value_var = tk.StringVar(value="not read" if item.enabled else "disabled")
             pv_var = tk.StringVar(value=item.pv)
-            ttk.Label(self.tune_frame, text=item.label).grid(row=row, column=1, sticky="w", padx=3)
+            ttk.Label(self.tune_frame, text=item.label).grid(row=row, column=2, sticky="w", padx=3)
             entry = ttk.Entry(self.tune_frame, textvariable=pv_var, width=34)
-            entry.grid(row=row, column=2, sticky="ew", padx=3)
+            entry.grid(row=row, column=3, sticky="ew", padx=3)
             entry.bind("<FocusOut>", lambda _e, cfg=item, var=pv_var: setattr(cfg, "pv", var.get().strip()))
-            ttk.Label(self.tune_frame, text=item.unit).grid(row=row, column=3, sticky="w", padx=3)
-            ttk.Label(self.tune_frame, textvariable=value_var).grid(row=row, column=4, sticky="w", padx=3)
-            self.tune_rows.append((item, value_var, lamp))
-        self.tune_frame.columnconfigure(2, weight=1)
+            ttk.Label(self.tune_frame, text=item.unit).grid(row=row, column=4, sticky="w", padx=3)
+            ttk.Label(self.tune_frame, textvariable=value_var).grid(row=row, column=5, sticky="w", padx=3)
+            self.tune_rows.append((item, value_var, lamp, enabled_var, pv_var))
+        self.tune_frame.columnconfigure(3, weight=1)
 
     def refresh_tunes(self) -> None:
-        for item, value_var, lamp in self.tune_rows:
+        self.sync_runtime_config()
+        for item, value_var, lamp, enabled_var, _pv_var in self.tune_rows:
+            if not enabled_var.get():
+                value_var.set("disabled")
+                lamp.configure(text="SKIP", bg="#c9c9c9")
+                self._tune_values.pop(item.label, None)
+                continue
             try:
                 value = self.backend.get_value(item.pv)
                 converted = tune_value_to_frequency(value, self.cfg.sample_rate_hz, item.unit)
@@ -885,7 +1110,11 @@ class BPMViewer:
 
     def refresh_status_pvs(self) -> None:
         self.refresh_tunes()
-        for item, value_var, lamp in self.status_pv_rows:
+        for item, value_var, lamp, enabled_var, _pv_var in self.status_pv_rows:
+            if not enabled_var.get():
+                value_var.set("disabled")
+                lamp.configure(text="SKIP", bg="#c9c9c9")
+                continue
             try:
                 value = self.backend.get_value(item.pv)
                 text = str(value)
@@ -903,9 +1132,7 @@ class BPMViewer:
                 if self._last_status_values.get(item.pv) != error_marker:
                     self.session.event("status_pv_error", label=item.label, pv=item.pv, error=message)
                     self._last_status_values[item.pv] = error_marker
-        if self.status_after_id:
-            self.root.after_cancel(self.status_after_id)
-        self.status_after_id = self.root.after(max(self.cfg.refresh_ms, 1000), self.refresh_status_pvs)
+        self.status.set("Status/tune PV refresh finished. Disabled rows were skipped.")
 
     def close(self) -> None:
         if self.status_after_id:
