@@ -9,10 +9,13 @@ from bpm_core import (
     AppConfig,
     DemoBackend,
     SpectrumSettings,
+    COMBINATION_PRESETS,
     combine_selected_expressions,
     combination_expression,
+    find_spectrum_peaks,
     nearest_bpm_marker,
     normalize_button_tokens,
+    normalize_power,
     phase_pipeline,
     pv_for,
     read_button_phasors,
@@ -53,7 +56,8 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(normalize_button_tokens("mean(A,A,b)"), ["A", "B"])
 
     def test_expression_preset_builder_defaults_and_custom(self):
-        self.assertEqual(combine_selected_expressions([], "", False), "A; A+B+C+D")
+        self.assertEqual(COMBINATION_PRESETS[0][1], "A+B+C+D")
+        self.assertEqual(combine_selected_expressions([], "", False), "A+B+C+D; A")
         self.assertEqual(
             combine_selected_expressions(["A", "A+B+C+D", "A"], "B; C", True),
             "A; A+B+C+D; B; C",
@@ -226,6 +230,16 @@ class BPMIQViewerTest(unittest.TestCase):
         np.testing.assert_allclose(spec["window"], np.ones(16))
         np.testing.assert_allclose(spec["windowed"], x)
 
+    def test_normalize_power_and_peak_finder(self):
+        freq = np.arange(0, 10, dtype=float)
+        power = np.array([0, 1, 5, 1, 0, 2, 9, 2, 0, 1], dtype=float)
+
+        norm = normalize_power(power)
+        peaks = find_spectrum_peaks(freq, norm, max_peaks=2, min_frequency_hz=1.0, min_relative_height=0.1)
+
+        self.assertEqual(norm.max(), 1.0)
+        self.assertEqual([item[0] for item in peaks], [6.0, 2.0])
+
     def test_control_room_snapshot_phase_spectrum_regression(self):
         fixture = Path(__file__).parent / "tests" / "fixtures" / "control_room_BPMZ1L2RP_sum_2048.npz"
         data = np.load(fixture)
@@ -257,6 +271,17 @@ class BPMIQViewerTest(unittest.TestCase):
         )
 
         self.assertEqual([item[0] for item in markers], [200.0, 400.0])
+
+        bad_markers = tune_markers_from_values(
+            {
+                "nan": {"value": float("nan"), "unit": "auto"},
+                "zero": {"value": 0, "unit": "auto"},
+                "too_high": {"value": 900.0, "unit": "hz"},
+            },
+            fs=1000.0,
+            include_harmonics=True,
+        )
+        self.assertEqual(bad_markers, [])
 
     def test_session_logger_writes_jsonl_event(self):
         with tempfile.TemporaryDirectory() as tmp:

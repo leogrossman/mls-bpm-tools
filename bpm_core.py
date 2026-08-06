@@ -19,8 +19,8 @@ import numpy as np
 DEFAULT_SAMPLE_RATE = 6.25e6
 BUTTONS = ("A", "B", "C", "D")
 COMBINATION_PRESETS = (
-    ("A", "A"),
     ("Sum A+B+C+D", "A+B+C+D"),
+    ("A", "A"),
     ("B", "B"),
     ("C", "C"),
     ("D", "D"),
@@ -311,6 +311,43 @@ def spectrum_pipeline(x: np.ndarray, fs: float, settings: SpectrumSettings) -> D
     }
 
 
+def normalize_power(power: np.ndarray) -> np.ndarray:
+    power = np.asarray(power, dtype=float)
+    finite = power[np.isfinite(power)]
+    scale = float(np.max(finite)) if finite.size else 0.0
+    if scale <= 0:
+        return power.copy()
+    return power / scale
+
+
+def find_spectrum_peaks(
+    frequency_hz: np.ndarray,
+    power: np.ndarray,
+    max_peaks: int = 5,
+    min_frequency_hz: float = 1.0,
+    min_relative_height: float = 0.05,
+) -> List[Tuple[float, float]]:
+    freq = np.asarray(frequency_hz, dtype=float).ravel()
+    p = np.asarray(power, dtype=float).ravel()
+    n = min(freq.size, p.size)
+    if n < 3:
+        return []
+    freq = freq[:n]
+    p = np.nan_to_num(p[:n], nan=0.0, posinf=0.0, neginf=0.0)
+    max_power = float(np.max(p))
+    if max_power <= 0:
+        return []
+    candidates = []
+    threshold = max_power * max(min_relative_height, 0.0)
+    for i in range(1, n - 1):
+        if freq[i] < min_frequency_hz:
+            continue
+        if p[i] >= threshold and p[i] >= p[i - 1] and p[i] >= p[i + 1]:
+            candidates.append((freq[i], p[i]))
+    candidates.sort(key=lambda item: item[1], reverse=True)
+    return candidates[:max(max_peaks, 0)]
+
+
 def parse_expressions(text: str) -> List[str]:
     expressions = [item.strip() for item in re.split(r"[;\n]", text) if item.strip()]
     return expressions or ["A+B+C+D"]
@@ -326,7 +363,7 @@ def combine_selected_expressions(presets: Sequence[str], custom: str = "", use_c
         if expr not in seen:
             unique.append(expr)
             seen.add(expr)
-    return "; ".join(unique or ["A", "A+B+C+D"])
+    return "; ".join(unique or ["A+B+C+D", "A"])
 
 
 def tune_value_to_frequency(value: object, fs: float, unit: str = "auto") -> Optional[Tuple[float, float]]:

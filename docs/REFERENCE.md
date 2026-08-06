@@ -53,6 +53,16 @@ Important files:
 
 Raw snapshots are bounded and intended for regression/debugging, not long-term archiving.
 
+## Plot Window Controls
+
+- `all`: default view; shows I, Q, unwrapped phase, and phase spectrum.
+- `spectra`: shows phase spectrum and magnitude spectrum together.
+- `phase debug`: shows wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.
+- `Normalize spectra`: scales each plotted spectrum to its own maximum.
+- `Stack spectra`: applies a small visual offset so overlaid spectra do not hide each other.
+- `Tunes` / `Harmonics`: reads configured tune PVs and draws only valid in-range markers.
+- `Tune status / spectrum peaks`: lists tune PV status plus automatically detected spectrum peaks.
+
 ## Code Layout
 
 - `bpm_core.py`: testable, GUI-free analysis and PV helpers.

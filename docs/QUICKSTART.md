@@ -17,23 +17,36 @@ The main window is a BPM picker:
 
 ## First Plot To Trust
 
-Use `phase debug` first. It shows:
+The normal first plot is `all`. It opens I, Q, unwrapped phase, and the phase spectrum for:
+
+1. `A+B+C+D`
+2. `A`
+
+This is the fastest way to see whether the BPM is returning useful raw complex data. Switch to `phase debug` only when you want to inspect the calculation steps:
 
 1. `angle(z)`
 2. unwrapped phase
 3. detrended/windowed phase
 4. PSD
 
-Only move to `phase spectrum` or `spectra` after these intermediate traces look reasonable.
-
 ## Signals
 
 The default signals are:
 
-- `A`
 - `A+B+C+D`
+- `A`
 
-Use the `Signals to plot` panel to add B/C/D, difference candidates, mean, or a custom expression.
+Use the `Signals to plot` panel to add B/C/D, difference candidates, mean, or a custom expression. `Normalize spectra` and `Stack spectra` are on by default so overlaid spectra stay visible instead of covering each other.
+
+## Tunes And Peaks
+
+In a plot window, enable `Tunes` to read the configured tune PVs. Bad or out-of-range values are shown as errors in the side pane and are not drawn as plot markers. Enable `Harmonics` to draw valid harmonic markers.
+
+The `Tune status / spectrum peaks` pane lists:
+
+- tune PV read status and marker frequencies
+- automatically detected phase/magnitude spectrum peaks
+- the signal/BPM that produced each peak
 
 ## TBT Raw Logging
 

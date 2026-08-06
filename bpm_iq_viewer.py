@@ -94,8 +94,10 @@ from bpm_core import (
     TunePV,
     combine_selected_expressions,
     combination_expression,
+    find_spectrum_peaks,
     nearest_bpm_marker,
     normalize_button_tokens,
+    normalize_power,
     parse_expressions,
     phase_pipeline,
     pv_for,
@@ -166,8 +168,8 @@ class PlotWindow(tk.Toplevel):
         self,
         app: "BPMViewer",
         bpm_names: Sequence[str],
-        expression: str = "A; A+B+C+D",
-        plot_kind: str = "phase debug",
+        expression: str = "A+B+C+D; A",
+        plot_kind: str = "all",
         show_tunes: bool = False,
     ):
         super().__init__(app.root)
@@ -198,6 +200,10 @@ class PlotWindow(tk.Toplevel):
         ttk.Checkbutton(controls, text="Harmonics", variable=self.show_harmonics).pack(side=tk.LEFT)
         self.show_legend = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Legend", variable=self.show_legend, command=self.refresh).pack(side=tk.LEFT, padx=(6, 0))
+        self.normalize_spectra = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls, text="Normalize spectra", variable=self.normalize_spectra, command=self.refresh).pack(side=tk.LEFT, padx=(6, 0))
+        self.stack_spectra = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls, text="Stack spectra", variable=self.stack_spectra, command=self.refresh).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(controls, text="Refresh now", command=lambda: self.refresh(force_read=True)).pack(side=tk.LEFT)
         ttk.Button(controls, text="Pause", command=self.toggle_pause).pack(side=tk.LEFT, padx=4)
         ttk.Button(controls, text="Save data", command=self.save_data).pack(side=tk.LEFT, padx=4)
@@ -256,6 +262,11 @@ class PlotWindow(tk.Toplevel):
             wraplength=210,
             justify=tk.LEFT,
         ).pack(anchor="w")
+
+        analysis_box = ttk.LabelFrame(side, text="Tune status / spectrum peaks", padding=6)
+        analysis_box.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.analysis_text = tk.Text(analysis_box, height=12, width=30, wrap="none")
+        self.analysis_text.pack(fill=tk.BOTH, expand=True)
 
         fft_box = ttk.LabelFrame(side, text="FFT / phase settings", padding=6)
         fft_box.pack(fill=tk.X, pady=(8, 0))
@@ -372,6 +383,33 @@ class PlotWindow(tk.Toplevel):
     def selected_expression_text(self) -> str:
         presets = [expr for expr, var in self.preset_expression_vars.items() if var.get()]
         return combine_selected_expressions(presets, self.expr.get(), self.use_custom_expr.get())
+
+    def update_analysis_pane(self, tune_markers: Sequence[Tuple[float, str, str]], peaks: Sequence[Tuple[str, str, float, float]]) -> None:
+        if not hasattr(self, "analysis_text"):
+            return
+        lines = ["Tunes:"]
+        if self.show_tunes.get():
+            status_lines = self.app.tune_status_lines()
+            lines.extend(status_lines or ["  no tune rows configured"])
+            if tune_markers:
+                lines.append("Markers:")
+                for freq, label, _color in tune_markers[:20]:
+                    lines.append(f"  {label:10s} {freq:10.1f} Hz")
+            else:
+                lines.append("  no valid tune markers")
+        else:
+            lines.append("  disabled")
+        lines.append("")
+        lines.append("Peaks:")
+        if peaks:
+            for label, spectrum_name, freq, power in peaks[:36]:
+                lines.append(f"  {freq:10.1f} Hz  {spectrum_name:5s}  {power:8.3g}  {label}")
+        else:
+            lines.append("  no spectrum peaks in current view")
+        self.analysis_text.configure(state=tk.NORMAL)
+        self.analysis_text.delete("1.0", tk.END)
+        self.analysis_text.insert("1.0", "\n".join(lines))
+        self.analysis_text.configure(state=tk.DISABLED)
 
     def toggle_pause(self) -> None:
         self.running = not self.running
@@ -496,6 +534,8 @@ class PlotWindow(tk.Toplevel):
         settings = self.spectrum_settings()
         self.last_data = {}
         self.last_errors = {}
+        peak_records: List[Tuple[str, str, float, float]] = []
+        trace_index = 0
         tune_markers = self.app.current_tune_markers(include_harmonics=self.show_harmonics.get()) if self.show_tunes.get() else []
         if not active_bpms:
             axes[0].text(
@@ -534,6 +574,7 @@ class PlotWindow(tk.Toplevel):
                 phase = phase_steps["phase"]
                 mag = np.abs(z)
                 label = bpm if len(expressions) == 1 else f"{bpm} {expr}"
+                display_label = self._display_label(label, trace_index)
                 self.last_data[bpm][f"combined_{expr}"] = z
                 self.last_data[bpm][f"raw_phase_{expr}"] = phase_steps["raw_phase"]
                 self.last_data[bpm][f"phase_{expr}"] = phase
@@ -542,80 +583,94 @@ class PlotWindow(tk.Toplevel):
                 turns = np.arange(z.size)
 
                 if kind == "I/Q":
-                    axes[0].plot(z.real, z.imag, ".-", ms=2, label=label)
+                    axes[0].plot(z.real, z.imag, ".-", ms=2, label=display_label)
                     axes[0].set_xlabel("I")
                     axes[0].set_ylabel("Q")
                 elif kind == "raw buttons":
                     for button in buttons_to_plot:
                         raw = phasors[button]
-                        axes[0].plot(turns, raw.real, label=f"{bpm} {button} I", alpha=0.75)
-                        axes[0].plot(turns, raw.imag, label=f"{bpm} {button} Q", alpha=0.75, linestyle="--")
+                        axes[0].plot(turns, raw.real, label=f"{display_label} {button} I", alpha=0.75)
+                        axes[0].plot(turns, raw.imag, label=f"{display_label} {button} Q", alpha=0.75, linestyle="--")
                     axes[0].set_ylabel("raw I/Q [arb.]")
                     break
                 elif kind == "magnitude":
-                    axes[0].plot(turns, mag, label=label)
+                    axes[0].plot(turns, mag, label=display_label)
                     axes[0].set_ylabel("|phasor|")
                 elif kind == "phase":
-                    axes[0].plot(turns, phase, label=label)
+                    axes[0].plot(turns, phase, label=display_label)
                     axes[0].set_ylabel("unwrapped phase [rad]")
                 elif kind == "position-like":
                     denom = phasors.get("A", 0) + phasors.get("B", 0) + phasors.get("C", 0) + phasors.get("D", 0)
                     with np.errstate(divide="ignore", invalid="ignore"):
                         value = np.real(z / denom) if np.ndim(denom) else np.real(z)
-                    axes[0].plot(turns, value, label=label)
+                    axes[0].plot(turns, value, label=display_label)
                     axes[0].set_ylabel("Re(combination / sum), uncalibrated")
                 elif kind == "phase spectrum":
                     phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
-                    f, p = phase_spec["frequency_hz"], phase_spec["psd"]
-                    axes[0].semilogy(f, np.maximum(p, 1e-30), label=label)
+                    f, p_raw = phase_spec["frequency_hz"], phase_spec["psd"]
+                    p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
+                    self._record_peaks(peak_records, label, "phase", f, p)
+                    axes[0].semilogy(f, self._spectrum_display_power(p, trace_index), label=display_label, alpha=0.78)
                     axes[0].set_xlabel("frequency [Hz]")
-                    axes[0].set_ylabel("phase PSD [arb.]")
+                    axes[0].set_ylabel(self._spectrum_ylabel("phase PSD"))
                     axes[0].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                 elif kind == "magnitude spectrum":
-                    axes[0].plot(turns, mag, label=label)
+                    axes[0].plot(turns, mag, label=display_label)
                     mag_spec = spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
-                    f, p = mag_spec["frequency_hz"], mag_spec["psd"]
-                    axes[1].semilogy(f, np.maximum(p, 1e-30), label=label)
+                    f, p_raw = mag_spec["frequency_hz"], mag_spec["psd"]
+                    p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
+                    self._record_peaks(peak_records, label, "mag", f, p)
+                    axes[1].semilogy(f, self._spectrum_display_power(p, trace_index), label=display_label, alpha=0.78)
                     axes[0].set_ylabel("|phasor|")
                     axes[1].set_xlabel("frequency [Hz]")
-                    axes[1].set_ylabel("magnitude PSD [arb.]")
+                    axes[1].set_ylabel(self._spectrum_ylabel("magnitude PSD"))
                     axes[1].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                 elif kind == "spectra":
                     phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
                     mag_spec = spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
-                    f_phase, p_phase = phase_spec["frequency_hz"], phase_spec["psd"]
-                    f_mag, p_mag = mag_spec["frequency_hz"], mag_spec["psd"]
-                    axes[0].semilogy(f_phase, np.maximum(p_phase, 1e-30), label=label)
-                    axes[1].semilogy(f_mag, np.maximum(p_mag, 1e-30), label=label)
-                    axes[0].set_ylabel("phase PSD [arb.]")
-                    axes[1].set_ylabel("magnitude PSD [arb.]")
+                    f_phase, p_phase_raw = phase_spec["frequency_hz"], phase_spec["psd"]
+                    f_mag, p_mag_raw = mag_spec["frequency_hz"], mag_spec["psd"]
+                    p_phase = normalize_power(p_phase_raw) if self.normalize_spectra.get() else p_phase_raw
+                    p_mag = normalize_power(p_mag_raw) if self.normalize_spectra.get() else p_mag_raw
+                    self._record_peaks(peak_records, label, "phase", f_phase, p_phase)
+                    self._record_peaks(peak_records, label, "mag", f_mag, p_mag)
+                    axes[0].semilogy(f_phase, self._spectrum_display_power(p_phase, trace_index), label=display_label, alpha=0.78)
+                    axes[1].semilogy(f_mag, self._spectrum_display_power(p_mag, trace_index), label=display_label, alpha=0.78)
+                    axes[0].set_ylabel(self._spectrum_ylabel("phase PSD"))
+                    axes[1].set_ylabel(self._spectrum_ylabel("magnitude PSD"))
                     axes[1].set_xlabel("frequency [Hz]")
                     axes[0].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                     axes[1].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                 elif kind == "phase debug":
                     phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
-                    axes[0].plot(turns, phase_steps["raw_phase"], label=label)
-                    axes[1].plot(turns, phase, label=label)
-                    axes[2].plot(turns, phase_spec["detrended"], label=label)
-                    axes[2].plot(turns, phase_spec["windowed"], label=f"{label} windowed", alpha=0.65, linestyle="--")
-                    axes[3].semilogy(phase_spec["frequency_hz"], np.maximum(phase_spec["psd"], 1e-30), label=label)
+                    p_raw = phase_spec["psd"]
+                    p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
+                    self._record_peaks(peak_records, label, "phase", phase_spec["frequency_hz"], p)
+                    axes[0].plot(turns, phase_steps["raw_phase"], label=display_label)
+                    axes[1].plot(turns, phase, label=display_label)
+                    axes[2].plot(turns, phase_spec["detrended"], label=display_label)
+                    axes[2].plot(turns, phase_spec["windowed"], label=f"{display_label} windowed", alpha=0.65, linestyle="--")
+                    axes[3].semilogy(phase_spec["frequency_hz"], self._spectrum_display_power(p, trace_index), label=display_label, alpha=0.78)
                     axes[0].set_ylabel("angle(z) [rad]")
                     axes[1].set_ylabel("phase [rad]")
                     axes[2].set_ylabel("detrended/windowed")
-                    axes[3].set_ylabel("PSD")
+                    axes[3].set_ylabel(self._spectrum_ylabel("PSD"))
                     axes[3].set_xlabel("frequency [Hz]")
                     axes[3].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                 else:  # all
-                    axes[0].plot(turns, z.real, label=label)
-                    axes[1].plot(turns, z.imag, label=label)
-                    axes[2].plot(turns, phase, label=label)
+                    axes[0].plot(turns, z.real, label=display_label)
+                    axes[1].plot(turns, z.imag, label=display_label)
+                    axes[2].plot(turns, phase, label=display_label)
                     phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
-                    f, p = phase_spec["frequency_hz"], phase_spec["psd"]
-                    axes[3].semilogy(f, np.maximum(p, 1e-30), label=label)
+                    f, p_raw = phase_spec["frequency_hz"], phase_spec["psd"]
+                    p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
+                    self._record_peaks(peak_records, label, "phase", f, p)
+                    axes[3].semilogy(f, self._spectrum_display_power(p, trace_index), label=display_label, alpha=0.78)
                     axes[0].set_title("I")
                     axes[1].set_title("Q")
                     axes[2].set_title("phase")
-                    axes[3].set_title("phase spectrum")
+                    axes[3].set_title("phase spectrum" + (" (normalized)" if self.normalize_spectra.get() else "") + (" (stacked)" if self.stack_spectra.get() else ""))
+                trace_index += 1
 
         if active_bpms and not self.last_data:
             axes[0].text(
@@ -637,6 +692,7 @@ class PlotWindow(tk.Toplevel):
                 fontsize=9,
             )
 
+        peak_records.sort(key=lambda item: item[3], reverse=True)
         for index, ax in enumerate(axes):
             ax.grid(True, alpha=0.3)
             is_spectrum_axis = (
@@ -648,6 +704,8 @@ class PlotWindow(tk.Toplevel):
             )
             if tune_markers and is_spectrum_axis:
                 self._draw_tune_markers(ax, tune_markers)
+            if is_spectrum_axis:
+                self._draw_peak_markers(ax, peak_records)
             handles, _labels = ax.get_legend_handles_labels()
             if handles and self.show_legend.get():
                 ax.legend(loc="best")
@@ -656,6 +714,39 @@ class PlotWindow(tk.Toplevel):
         suffix = f"; {len(self.last_errors)} error(s)" if self.last_errors else ""
         tune_suffix = f"; {len(tune_markers)} tune marker(s)" if tune_markers else ""
         self.status.set(f"Updated {time.strftime('%H:%M:%S')} - {len(active_bpms)} BPM(s), signals {expr_text}{tune_suffix}{suffix}")
+        self.update_analysis_pane(tune_markers, peak_records)
+
+    def _record_peaks(self, records: List[Tuple[str, str, float, float]], label: str, spectrum_name: str, freq: np.ndarray, power: np.ndarray) -> None:
+        for peak_freq, peak_power in find_spectrum_peaks(freq, power, max_peaks=4, min_frequency_hz=10.0, min_relative_height=0.08):
+            records.append((label, spectrum_name, peak_freq, peak_power))
+
+    def _spectrum_display_power(self, power: np.ndarray, trace_index: int) -> np.ndarray:
+        out = np.maximum(np.asarray(power, dtype=float), 1e-30)
+        if self.stack_spectra.get():
+            out = out * (10.0 ** (-0.45 * max(trace_index, 0)))
+        return out
+
+    def _display_label(self, label: str, trace_index: int) -> str:
+        if self.stack_spectra.get() and trace_index:
+            return f"{label} offset {trace_index}"
+        return label
+
+    def _spectrum_ylabel(self, base: str) -> str:
+        suffix = "norm." if self.normalize_spectra.get() else "arb."
+        if self.stack_spectra.get():
+            suffix += ", stacked"
+        return f"{base} [{suffix}]"
+
+    def _draw_peak_markers(self, ax, records: Sequence[Tuple[str, str, float, float]]) -> None:
+        ymin, ymax = ax.get_ylim()
+        seen = set()
+        for _label, _spectrum_name, freq, _power in records[:12]:
+            rounded = round(freq, 3)
+            if rounded in seen:
+                continue
+            seen.add(rounded)
+            ax.axvline(freq, color="0.25", alpha=0.18, linestyle=":", linewidth=0.8)
+        ax.set_ylim(ymin, ymax)
 
     def _draw_tune_markers(self, ax, markers: Sequence[Tuple[float, str, str]]) -> None:
         ymin, ymax = ax.get_ylim()
@@ -1071,14 +1162,14 @@ class BPMViewer:
         self.draw_bpm_strip()
         self.status.set(f"Selected {len(targets)} known BPM candidate(s). Starred BPMs have orbit PVs seen in betagui/CS-Studio material.")
 
-    def open_startup_plot(self, expression: str = "A; B; C; D; A+B+C+D") -> None:
+    def open_startup_plot(self, expression: str = "A+B+C+D; A") -> None:
         self.select_known_bpms()
         names = self.selected_names()[:2] or [bpm.name for bpm in self.known_bpms()[:2]]
         if not names:
             self.status.set("No BPMs configured; check bpm_config.json.")
             return
-        self.session.event("startup_plot_opened", bpms=names, expression=expression, plot_kind="raw buttons")
-        PlotWindow(self, names, expression=expression, plot_kind="raw buttons", show_tunes=False)
+        self.session.event("startup_plot_opened", bpms=names, expression=expression, plot_kind="all")
+        PlotWindow(self, names, expression=expression, plot_kind="all", show_tunes=False)
 
     def open_selected(self) -> None:
         names = self.selected_names()
@@ -1131,7 +1222,7 @@ class BPMViewer:
             "Quick control-room flow\n\n"
             "1. Start safe: python3 bpm_iq_viewer.py --safe\n"
             "2. Select one or more BPMs. Starred BPMs are known from local betagui / CS-Studio material.\n"
-            "3. Click Open selected plot. Use semicolon-separated expressions to overlay traces, e.g. A; B; C; D; A+B+C+D.\n"
+            "3. Click Open selected plot. Sum A+B+C+D opens first; add A/B/C/D or other expressions as needed.\n"
             "4. For spectra, enable tune markers in the plot window. Tune PVs are read only when requested.\n"
             "5. If a PV is wrong, edit it in the table or PV probe, then Save config.\n"
             "6. Enable BPM logging only after reviewing Show planned enable commands. In --safe mode writes are blocked.\n\n"
@@ -1243,6 +1334,16 @@ class BPMViewer:
     def current_tune_markers(self, include_harmonics: bool) -> List[Tuple[float, str, str]]:
         self.refresh_tunes()
         return tune_markers_from_values(self._tune_values, self.cfg.sample_rate_hz, include_harmonics)
+
+    def tune_status_lines(self) -> List[str]:
+        lines: List[str] = []
+        for item, value_var, lamp, enabled_var, _pv_var in self.tune_rows:
+            if not enabled_var.get():
+                lines.append(f"  {item.label}: disabled")
+            else:
+                state = lamp.cget("text")
+                lines.append(f"  {item.label}: {state} {value_var.get()}")
+        return lines
 
     def refresh_status_pvs(self) -> None:
         self.refresh_tunes()
@@ -1374,7 +1475,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--live", action="store_true", help="use live EPICS reads")
     p.add_argument("--allow-writes", action="store_true", help="allow confirmed EPICS writes; requires --live and is blocked by --safe")
     p.add_argument("--bpm", action="append", default=[], help="open plot for BPM at startup; repeatable")
-    p.add_argument("--combination", default="A; A+B+C+D", help="startup signal expression list for --bpm")
+    p.add_argument("--combination", default="A+B+C+D; A", help="startup signal expression list for --bpm")
     p.add_argument("--no-startup-plot", action="store_true", help="legacy no-op; startup plots are off unless --bpm is used")
     p.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_ROOT, help="directory for session logs")
     p.add_argument("--log-level", default="INFO")

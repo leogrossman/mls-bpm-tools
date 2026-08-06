@@ -10,10 +10,12 @@ This file tracks requested control-room BPM viewer work so implementation status
 - Main window has a clickable BPM lattice strip and a BPM list.
 - BPM list can filter by BPM name or section, select all, select visible/filter, select known, and clear.
 - Plot windows can add/remove/toggle BPM overlays.
-- Plot windows have signal-combination checkboxes; standard default is `A` and `A+B+C+D`.
+- Plot windows have signal-combination checkboxes; standard default is `A+B+C+D` and `A`.
 - Optional custom expression still exists for advanced combinations.
 - Legend can be toggled off.
-- Tune and harmonic markers can be toggled.
+- Tune and harmonic markers can be toggled; invalid tune PV values are reported but not drawn.
+- Plot windows list detected spectrum peaks and tune marker status in a side pane.
+- Spectrum overlays can be normalized and visually stacked so multiple BPMs/signals stay visible.
 - Phase debug plot shows wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.
 - FFT settings are editable: unwrap threshold, detrend, window, NFFT, and frequency resolution.
 - TBT start/stop/check controls use the control-room `ddc_raw` and `ddc_synth` `.SCAN` PVs.
