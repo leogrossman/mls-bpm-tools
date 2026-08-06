@@ -68,6 +68,16 @@ Raw snapshots are bounded and intended for regression/debugging, not long-term a
 - `Tune status / spectrum peaks`: lists tune PV status plus automatically detected spectrum peaks.
 - `max time points`: display-only decimation for raw time traces. Spectra still use the full waveform block.
 
+## Lattice Viewer
+
+The lattice viewer shows clickable BPM markers at configured BPM positions and overlays basic optics-model curves:
+
+- beta x
+- beta y
+- horizontal dispersion `Dx`
+
+The mode selector includes `standard user`, `low alpha`, and `SSMB`. These are smooth built-in model overlays for orientation and BPM selection; they are not yet a replacement for imported, machine-approved optics tables. Use them to quickly find high-dispersion or beta-relevant BPM regions, then replace them with real optics exports when available.
+
 ## FFT And Phase Settings
 
 FFT settings apply to the whole plot window, not to each BPM separately. That is intentional: if Sum, A, and two BPMs are overlaid, the spectra should use the same detrending, window, NFFT, and frequency axis so peak heights and widths are comparable.

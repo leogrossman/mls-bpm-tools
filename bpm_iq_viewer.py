@@ -89,11 +89,15 @@ from bpm_core import (
     BPMInfo,
     Backend,
     DemoBackend,
+    OPTICS_MODE_LABELS,
+    OPTICS_MODES,
     SpectrumSettings,
     StatusPV,
     TunePV,
     combine_selected_expressions,
     combination_expression,
+    basic_lattice_functions,
+    canonical_optics_mode,
     decimation_stride,
     estimate_iq_payload,
     find_spectrum_peaks,
@@ -1065,51 +1069,71 @@ class LatticeWindow(tk.Toplevel):
         top = ttk.Frame(self)
         top.pack(fill=tk.X, padx=6, pady=4)
         ttk.Label(top, text="Optics mode:").pack(side=tk.LEFT)
-        modes = sorted({mode for bpm in app.cfg.bpms for mode in bpm.modes}) or ["low_emittance"]
-        self.mode = tk.StringVar(value=modes[0])
-        ttk.Combobox(top, textvariable=self.mode, values=modes, state="readonly", width=14).pack(side=tk.LEFT, padx=4)
+        mode_labels = [OPTICS_MODE_LABELS[key] for key in OPTICS_MODES]
+        self.mode = tk.StringVar(value=OPTICS_MODE_LABELS["standard_user"])
+        ttk.Combobox(top, textvariable=self.mode, values=mode_labels, state="readonly", width=14).pack(side=tk.LEFT, padx=4)
+        self.mode.trace_add("write", lambda *_args: self.draw())
+        self.show_beta_x = tk.BooleanVar(value=True)
+        self.show_beta_y = tk.BooleanVar(value=True)
+        self.show_dispersion = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top, text="beta x", variable=self.show_beta_x, command=self.draw).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(top, text="beta y", variable=self.show_beta_y, command=self.draw).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(top, text="Dx", variable=self.show_dispersion, command=self.draw).pack(side=tk.LEFT, padx=2)
         self.show_labels = tk.BooleanVar(value=True)
         ttk.Checkbutton(top, text="Labels", variable=self.show_labels, command=self.draw).pack(side=tk.LEFT, padx=4)
-        ttk.Label(top, text="Click a BPM marker to select/open raw I/Q. Positions/PVs come from bpm_config.json.").pack(side=tk.LEFT, padx=12)
+        ttk.Label(top, text="Click BPM marker to open raw I/Q. Optics curves are basic model overlays until real lattice imports land.").pack(side=tk.LEFT, padx=12)
 
         self.fig = Figure(figsize=(10, 4), dpi=100)
         self.ax = self.fig.add_subplot(111)
+        self.ax_dispersion = None
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         self.canvas.mpl_connect("pick_event", self.on_pick)
         self.draw()
 
     def draw(self) -> None:
-        self.ax.clear()
+        self.fig.clear()
+        self.ax = self.fig.add_subplot(111)
+        self.ax_dispersion = self.ax.twinx()
         bpms = sorted(self.app.cfg.bpms, key=lambda b: b.s_m)
         s = np.array([b.s_m for b in bpms])
-        d = np.array([b.dispersion_x_m for b in bpms])
-        bx = np.array([b.beta_x_m for b in bpms], dtype=float)
-        by = np.array([b.beta_y_m for b in bpms], dtype=float)
-        has_dispersion = np.any(np.isfinite(d) & (np.abs(d) > 0))
-        has_beta_x = np.any(np.isfinite(bx) & (np.abs(bx) > 0))
-        has_beta_y = np.any(np.isfinite(by) & (np.abs(by) > 0))
-        marker_y = d if has_dispersion else np.zeros_like(s)
-        if has_dispersion:
-            self.ax.plot(s, d, "-", alpha=0.6, label="Dx [m]")
-        if has_beta_x:
-            self.ax.plot(s, bx, "-", alpha=0.45, label="beta_x [m]")
-        if has_beta_y:
-            self.ax.plot(s, by, "-", alpha=0.45, label="beta_y [m]")
-        points = self.ax.scatter(s, marker_y, picker=True, pickradius=8, label="BPM")
+        mode_key = canonical_optics_mode(self.mode.get())
+        optics = basic_lattice_functions(s, mode_key)
+        beta_handles = []
+        dispersion_handles = []
+        if self.show_beta_x.get():
+            beta_handles.extend(self.ax.plot(s, optics["beta_x_m"], color="#1f77b4", linewidth=1.8, label="beta x [m]"))
+        if self.show_beta_y.get():
+            beta_handles.extend(self.ax.plot(s, optics["beta_y_m"], color="#d62728", linewidth=1.8, label="beta y [m]"))
+        if self.show_dispersion.get():
+            dispersion_handles.extend(
+                self.ax_dispersion.plot(s, optics["dispersion_x_m"], color="#2ca02c", linewidth=1.8, linestyle="--", label="Dx [m]")
+            )
+        marker_y = np.zeros_like(s)
+        points = self.ax.scatter(s, marker_y, marker="v", s=46, color="#222222", picker=True, pickradius=8, label="BPM")
         points._bpm_names = [b.name for b in bpms]  # type: ignore[attr-defined]
         points._bpm_pvs = [(b.x_pv, b.y_pv) for b in bpms]  # type: ignore[attr-defined]
         if self.show_labels.get():
             for bpm, y in zip(bpms, marker_y):
                 label = f"{bpm.name}\nX:{bpm.x_pv}\nY:{bpm.y_pv}" if bpm.x_pv or bpm.y_pv else bpm.name
-                self.ax.annotate(label, (bpm.s_m, y), fontsize=6, rotation=45)
+                self.ax.annotate(label, (bpm.s_m, y), fontsize=6, rotation=45, xytext=(2, 5), textcoords="offset points")
         self.ax.set_xlabel("s [m]")
-        self.ax.set_ylabel("lattice function [m]" if has_dispersion or has_beta_x or has_beta_y else "BPM markers")
-        if not (has_dispersion or has_beta_x or has_beta_y):
-            self.ax.set_ylim(-1.0, 1.0)
-            self.ax.text(0.02, 0.95, "Only BPM positions/PVs are configured; import optics later for beta/Dx.", transform=self.ax.transAxes, va="top")
+        self.ax.set_ylabel("beta functions [m]")
+        self.ax_dispersion.set_ylabel("horizontal dispersion Dx [m]")
+        self.ax.text(
+            0.01,
+            0.98,
+            f"{OPTICS_MODE_LABELS[mode_key]} basic optics model",
+            transform=self.ax.transAxes,
+            va="top",
+            fontsize=9,
+            bbox={"facecolor": "white", "edgecolor": "0.8", "alpha": 0.85},
+        )
         self.ax.grid(True, alpha=0.3)
-        self.ax.legend()
+        handles = beta_handles + dispersion_handles + [points]
+        labels = [handle.get_label() for handle in handles]
+        if handles:
+            self.ax.legend(handles, labels, loc="upper right")
         self.fig.tight_layout()
         self.canvas.draw_idle()
 

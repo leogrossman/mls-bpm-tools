@@ -22,6 +22,7 @@ This file tracks requested control-room BPM viewer work so implementation status
 - Default live plot refresh is 3 seconds and can be changed per plot window.
 - Plot-window settings are grouped into tabs so controls fit on shorter screens.
 - Raw time traces are display-decimated and repeated cached refreshes reuse derived analysis results where possible.
+- Lattice viewer overlays basic beta-x, beta-y, and horizontal-dispersion model curves for standard user, low-alpha, and SSMB modes.
 - Phase debug plot shows wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.
 - FFT settings are editable: unwrap threshold, detrend, window, NFFT, and frequency resolution.
 - TBT start/stop/check controls use the control-room `ddc_raw` and `ddc_synth` `.SCAN` PVs.
@@ -35,13 +36,13 @@ This file tracks requested control-room BPM viewer work so implementation status
 
 ## Partially Implemented
 
-- Lattice viewer: BPM positions are clickable; true beta/dispersion overlays still need trustworthy optics imports.
+- Lattice viewer: BPM positions are clickable and basic optics overlays exist; true beta/dispersion overlays still need trustworthy optics imports.
 - Status PVs: tune/noise/status readbacks are configurable and editable; unconfirmed drive PV names remain disabled by default.
 - EPICS7/PVA: architecture can support a new backend, but only Channel Access via `pyepics` is implemented today.
 
 ## Not Yet Implemented
 
-- Full optics mode import for standard user, low-alpha, and SSMB lattice functions.
+- Full measured optics table import for standard user, low-alpha, and SSMB lattice functions.
 - Calibrated transverse x/y formulas using confirmed button geometry and BPM calibration constants.
 - Calibrated longitudinal phase-to-time conversion using confirmed DDC/RF reference frequency.
 - Multi-BPM dispersion/phase-space reconstruction.

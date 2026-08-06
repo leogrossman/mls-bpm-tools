@@ -19,6 +19,12 @@ import numpy as np
 DEFAULT_SAMPLE_RATE = 6.25e6
 DEFAULT_REFRESH_MS = 3000
 BUTTONS = ("A", "B", "C", "D")
+OPTICS_MODES = ("standard_user", "low_alpha", "ssmb")
+OPTICS_MODE_LABELS = {
+    "standard_user": "standard user",
+    "low_alpha": "low alpha",
+    "ssmb": "SSMB",
+}
 COMBINATION_PRESETS = (
     ("Sum A+B+C+D", "A+B+C+D"),
     ("A", "A"),
@@ -229,6 +235,62 @@ def decimation_stride(n_samples: int, max_points: int) -> int:
     if max_points <= 0:
         return 1
     return max(1, int(math.ceil(max(int(n_samples), 1) / max_points)))
+
+
+def canonical_optics_mode(mode: str) -> str:
+    cleaned = mode.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "user": "standard_user",
+        "standard": "standard_user",
+        "standard_user": "standard_user",
+        "low": "low_alpha",
+        "lowalpha": "low_alpha",
+        "low_alpha": "low_alpha",
+        "low_emittance": "standard_user",
+        "ssmb": "ssmb",
+    }
+    return aliases.get(cleaned, "standard_user")
+
+
+def basic_lattice_functions(s_m: Sequence[float], mode: str = "standard_user") -> Dict[str, np.ndarray]:
+    """Return smooth placeholder optics curves at BPM positions.
+
+    These curves are intentionally conservative visual guides until real MLS
+    optics exports are imported. They preserve the rough scale and mode-to-mode
+    qualitative differences needed for choosing BPMs in the GUI.
+    """
+    s = np.asarray(s_m, dtype=float).ravel()
+    if s.size == 0:
+        return {
+            "s_m": s,
+            "beta_x_m": s.copy(),
+            "beta_y_m": s.copy(),
+            "dispersion_x_m": s.copy(),
+        }
+    span = max(float(np.nanmax(s) - np.nanmin(s)), 1.0)
+    u = (s - float(np.nanmin(s))) / span
+    theta = 2.0 * np.pi * u
+    mode_key = canonical_optics_mode(mode)
+
+    if mode_key == "low_alpha":
+        beta_x = 8.5 + 2.4 * np.cos(2 * theta - 0.2) + 1.4 * np.cos(6 * theta)
+        beta_y = 5.8 + 2.0 * np.sin(2 * theta + 0.7) + 0.9 * np.cos(8 * theta)
+        dispersion = 0.55 + 0.34 * np.cos(4 * theta + 0.25) + 0.10 * np.sin(10 * theta)
+    elif mode_key == "ssmb":
+        beta_x = 6.8 + 2.8 * np.cos(2 * theta + 0.5) + 1.8 * np.sin(8 * theta)
+        beta_y = 7.2 + 2.2 * np.sin(2 * theta - 0.4) + 1.2 * np.cos(6 * theta)
+        dispersion = 0.18 + 0.12 * np.cos(4 * theta - 0.7) + 0.05 * np.sin(12 * theta)
+    else:
+        beta_x = 7.2 + 2.1 * np.cos(2 * theta) + 1.1 * np.cos(8 * theta)
+        beta_y = 5.6 + 1.8 * np.sin(2 * theta + 0.8) + 0.8 * np.cos(6 * theta)
+        dispersion = 0.32 + 0.20 * np.cos(4 * theta - 0.15) + 0.06 * np.sin(10 * theta)
+
+    return {
+        "s_m": s,
+        "beta_x_m": np.maximum(beta_x, 0.2),
+        "beta_y_m": np.maximum(beta_y, 0.2),
+        "dispersion_x_m": dispersion,
+    }
 
 
 def tbt_scan_commands(cfg: AppConfig, names: Sequence[str], enabled: bool) -> List[Tuple[str, object]]:

@@ -10,6 +10,9 @@ from bpm_core import (
     DemoBackend,
     SpectrumSettings,
     COMBINATION_PRESETS,
+    OPTICS_MODES,
+    basic_lattice_functions,
+    canonical_optics_mode,
     combine_selected_expressions,
     combination_expression,
     decimation_stride,
@@ -156,6 +159,25 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(decimation_stride(1000, 2500), 1)
         self.assertEqual(decimation_stride(8192, 2500), 4)
         self.assertEqual(decimation_stride(8192, 0), 1)
+
+    def test_basic_lattice_functions_cover_required_modes(self):
+        s = np.linspace(0.0, 48.0, 28)
+        self.assertEqual(canonical_optics_mode("standard user"), "standard_user")
+        self.assertEqual(canonical_optics_mode("low-alpha"), "low_alpha")
+        self.assertEqual(canonical_optics_mode("low_emittance"), "standard_user")
+
+        for mode in OPTICS_MODES:
+            optics = basic_lattice_functions(s, mode)
+            self.assertEqual(set(optics), {"s_m", "beta_x_m", "beta_y_m", "dispersion_x_m"})
+            self.assertEqual(optics["beta_x_m"].shape, s.shape)
+            self.assertEqual(optics["beta_y_m"].shape, s.shape)
+            self.assertEqual(optics["dispersion_x_m"].shape, s.shape)
+            self.assertTrue(np.all(optics["beta_x_m"] > 0.0))
+            self.assertTrue(np.all(optics["beta_y_m"] > 0.0))
+
+        standard = basic_lattice_functions(s, "standard_user")
+        low_alpha = basic_lattice_functions(s, "low_alpha")
+        self.assertGreater(np.mean(low_alpha["dispersion_x_m"]), np.mean(standard["dispersion_x_m"]))
 
     def test_config_save_roundtrip_keeps_runtime_pv_edits(self):
         with tempfile.TemporaryDirectory() as tmp:

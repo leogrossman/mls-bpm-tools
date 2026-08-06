@@ -15,6 +15,8 @@ The main window is a BPM picker:
 4. Use `Live` to keep reading periodically.
 5. Use `BPM overlays` to add or toggle BPMs in that plot.
 
+Use `Open lattice viewer` for the larger clickable lattice plot. It can overlay basic beta-x, beta-y, and horizontal-dispersion curves for standard user, low-alpha, and SSMB optics modes.
+
 ## First Plot To Trust
 
 The normal first plot is `all`. It opens raw magnitude, unwrapped phase, phase spectrum, and magnitude spectrum for:
