@@ -9,11 +9,14 @@ from bpm_iq_viewer import (
     AppConfig,
     DemoBackend,
     SessionLogger,
+    SpectrumSettings,
     combination_expression,
     normalize_button_tokens,
+    phase_pipeline,
     pv_for,
     read_button_phasors,
     spectrum,
+    spectrum_pipeline,
     tune_markers_from_values,
     tune_value_to_frequency,
 )
@@ -121,6 +124,49 @@ class BPMIQViewerTest(unittest.TestCase):
         freq, power = spectrum(x, fs)
 
         self.assertAlmostEqual(freq[np.argmax(power)], 125.0, delta=fs / x.size)
+
+    def test_phase_unwrap_recovers_continuous_ramp(self):
+        n = np.arange(128)
+        true_phase = 0.35 * n - 4.0
+        z = np.exp(1j * true_phase)
+
+        steps = phase_pipeline(z, SpectrumSettings(unwrap_phase=True))
+
+        offset = steps["phase"][0] - true_phase[0]
+        np.testing.assert_allclose(steps["phase"] - offset, true_phase, atol=1e-12)
+        self.assertGreater(np.max(np.abs(np.diff(steps["raw_phase"]))), np.pi)
+
+    def test_phase_spectrum_matches_matlab_style_unwrap_detrend(self):
+        fs = 6250.0
+        n = np.arange(4096)
+        modulation_hz = 312.5
+        slow_phase_ramp = 0.02 * n
+        modulation = 0.08 * np.sin(2 * np.pi * modulation_hz * n / fs)
+        iq = np.exp(1j * (slow_phase_ramp + modulation))
+        settings = SpectrumSettings(
+            unwrap_phase=True,
+            detrend="linear",
+            window="hann",
+            frequency_resolution_hz=10.0,
+        )
+
+        phase = phase_pipeline(iq, settings)["phase"]
+        spec = spectrum_pipeline(phase, fs, settings)
+        peak = spec["frequency_hz"][np.argmax(spec["psd"][1:]) + 1]
+
+        self.assertAlmostEqual(peak, modulation_hz, delta=10.0)
+        self.assertLess(abs(np.mean(spec["detrended"])), 1e-10)
+
+    def test_spectrum_pipeline_window_and_nfft_settings(self):
+        fs = 1000.0
+        x = np.ones(16)
+        settings = SpectrumSettings(detrend="none", window="rectangular", nfft=64)
+
+        spec = spectrum_pipeline(x, fs, settings)
+
+        self.assertEqual(len(spec["frequency_hz"]), 33)
+        np.testing.assert_allclose(spec["window"], np.ones(16))
+        np.testing.assert_allclose(spec["windowed"], x)
 
     def test_tune_value_conversion_and_harmonic_markers(self):
         freq, tune = tune_value_to_frequency(0.2, 1000.0, "auto")

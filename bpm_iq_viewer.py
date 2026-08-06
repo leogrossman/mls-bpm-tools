@@ -123,6 +123,16 @@ class TunePV:
     enabled: bool = True
 
 
+@dataclass
+class SpectrumSettings:
+    unwrap_phase: bool = True
+    unwrap_discont_rad: float = math.pi
+    detrend: str = "linear"
+    window: str = "hann"
+    nfft: int = 0
+    frequency_resolution_hz: float = 0.0
+
+
 class SessionLogger:
     def __init__(self, session_dir: Path):
         self.session_dir = session_dir
@@ -325,16 +335,80 @@ def combination_expression(data: Mapping[str, np.ndarray], expr: str) -> np.ndar
 
 
 def spectrum(x: np.ndarray, fs: float) -> Tuple[np.ndarray, np.ndarray]:
-    x = np.asarray(x, dtype=float)
-    x = x - np.nanmean(x)
-    if x.size > 1:
-        p = np.polyfit(np.arange(x.size), x, 1)
-        x = x - np.polyval(p, np.arange(x.size))
-    win = np.hanning(x.size)
-    spec = np.fft.rfft(np.nan_to_num(x) * win)
-    freq = np.fft.rfftfreq(x.size, d=1.0 / fs)
-    psd = (np.abs(spec) ** 2) / max(np.sum(win**2), 1.0)
-    return freq, psd
+    result = spectrum_pipeline(x, fs, SpectrumSettings())
+    return result["frequency_hz"], result["psd"]
+
+
+def phase_pipeline(z: np.ndarray, settings: SpectrumSettings) -> Dict[str, np.ndarray]:
+    z = np.asarray(z, dtype=complex).ravel()
+    raw_phase = np.angle(z)
+    if settings.unwrap_phase:
+        phase = np.unwrap(raw_phase, discont=max(settings.unwrap_discont_rad, 1e-12))
+    else:
+        phase = raw_phase.copy()
+    return {"raw_phase": raw_phase, "phase": phase}
+
+
+def _detrend_signal(x: np.ndarray, mode: str) -> np.ndarray:
+    x = np.asarray(x, dtype=float).ravel()
+    x = np.nan_to_num(x, nan=np.nanmean(x) if np.any(np.isfinite(x)) else 0.0)
+    mode = mode.lower()
+    if mode in ("none", "off"):
+        return x.copy()
+    if mode in ("constant", "mean"):
+        return x - np.mean(x)
+    if mode == "linear":
+        if x.size < 2:
+            return x - np.mean(x)
+        turns = np.arange(x.size, dtype=float)
+        coeff = np.polyfit(turns, x, 1)
+        return x - np.polyval(coeff, turns)
+    raise ValueError(f"Unsupported detrend mode: {mode}")
+
+
+def _window_values(n: int, name: str) -> np.ndarray:
+    name = name.lower()
+    if name in ("none", "rect", "rectangular", "boxcar"):
+        return np.ones(n)
+    if name in ("hann", "hanning"):
+        return np.hanning(n)
+    if name == "hamming":
+        return np.hamming(n)
+    if name == "blackman":
+        return np.blackman(n)
+    raise ValueError(f"Unsupported FFT window: {name}")
+
+
+def _resolve_nfft(n_samples: int, fs: float, settings: SpectrumSettings) -> int:
+    if settings.frequency_resolution_hz > 0:
+        nfft = int(math.ceil(fs / settings.frequency_resolution_hz))
+    elif settings.nfft > 0:
+        nfft = int(settings.nfft)
+    else:
+        nfft = n_samples
+    return max(n_samples, nfft, 1)
+
+
+def spectrum_pipeline(x: np.ndarray, fs: float, settings: SpectrumSettings) -> Dict[str, np.ndarray]:
+    raw = np.asarray(x, dtype=float).ravel()
+    if raw.size == 0:
+        raise ValueError("Cannot spectrum empty signal")
+    detrended = _detrend_signal(raw, settings.detrend)
+    window = _window_values(detrended.size, settings.window)
+    windowed = np.nan_to_num(detrended) * window
+    nfft = _resolve_nfft(detrended.size, fs, settings)
+    spec = np.fft.rfft(windowed, n=nfft)
+    freq = np.fft.rfftfreq(nfft, d=1.0 / fs)
+    psd = (np.abs(spec) ** 2) / max(np.sum(window**2), 1.0)
+    return {
+        "raw": raw,
+        "detrended": detrended,
+        "window": window,
+        "windowed": windowed,
+        "frequency_hz": freq,
+        "spectrum": spec,
+        "psd": psd,
+    }
 
 
 def parse_expressions(text: str) -> List[str]:
@@ -410,7 +484,7 @@ class PlotWindow(tk.Toplevel):
         ttk.Combobox(
             controls,
             textvariable=self.plot_kind,
-            values=("I/Q", "raw buttons", "magnitude", "phase", "phase spectrum", "magnitude spectrum", "spectra", "position-like", "all"),
+            values=("I/Q", "raw buttons", "magnitude", "phase", "phase spectrum", "magnitude spectrum", "spectra", "phase debug", "position-like", "all"),
             state="readonly",
             width=16,
         ).pack(side=tk.LEFT)
@@ -464,6 +538,30 @@ class PlotWindow(tk.Toplevel):
             justify=tk.LEFT,
         ).pack(anchor="w")
 
+        fft_box = ttk.LabelFrame(side, text="FFT / phase settings", padding=6)
+        fft_box.pack(fill=tk.X, pady=(8, 0))
+        self.unwrap_phase = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fft_box, text="unwrap(angle)", variable=self.unwrap_phase, command=self.refresh).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(fft_box, text="unwrap jump rad").grid(row=1, column=0, sticky="w")
+        self.unwrap_discont = tk.StringVar(value=f"{math.pi:.6g}")
+        ttk.Entry(fft_box, textvariable=self.unwrap_discont, width=10).grid(row=1, column=1, sticky="ew")
+        ttk.Label(fft_box, text="detrend").grid(row=2, column=0, sticky="w")
+        self.detrend_mode = tk.StringVar(value="linear")
+        ttk.Combobox(fft_box, textvariable=self.detrend_mode, values=("linear", "constant", "none"), state="readonly", width=10).grid(row=2, column=1, sticky="ew")
+        ttk.Label(fft_box, text="window").grid(row=3, column=0, sticky="w")
+        self.window_name = tk.StringVar(value="hann")
+        ttk.Combobox(fft_box, textvariable=self.window_name, values=("hann", "hamming", "blackman", "rectangular"), state="readonly", width=10).grid(row=3, column=1, sticky="ew")
+        ttk.Label(fft_box, text="NFFT").grid(row=4, column=0, sticky="w")
+        self.nfft_text = tk.StringVar(value="")
+        ttk.Entry(fft_box, textvariable=self.nfft_text, width=10).grid(row=4, column=1, sticky="ew")
+        ttk.Label(fft_box, text="df Hz").grid(row=5, column=0, sticky="w")
+        self.freq_res_text = tk.StringVar(value="1000")
+        ttk.Entry(fft_box, textvariable=self.freq_res_text, width=10).grid(row=5, column=1, sticky="ew")
+        self.log_raw_snapshots = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fft_box, text="log first raw snapshot", variable=self.log_raw_snapshots).grid(row=6, column=0, columnspan=2, sticky="w")
+        ttk.Button(fft_box, text="Apply + refresh", command=self.refresh).grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        fft_box.columnconfigure(1, weight=1)
+
         plot_frame = ttk.Frame(body)
         body.add(plot_frame, weight=1)
         self.figure = Figure(figsize=(10, 7), dpi=100)
@@ -472,6 +570,7 @@ class PlotWindow(tk.Toplevel):
         NavigationToolbar2Tk(self.canvas, plot_frame).update()
         self.last_data: Dict[str, Dict[str, np.ndarray]] = {}
         self.last_errors: Dict[str, str] = {}
+        self.logged_raw_snapshots: set = set()
         for bpm in self.bpm_names:
             self.add_bpm(bpm, refresh=False)
         self.rebuild_bpm_rows()
@@ -574,6 +673,51 @@ class PlotWindow(tk.Toplevel):
         self.app.session.event("save_data", path=path, bpms=list(self.last_data))
         self.status.set(f"Saved {path}")
 
+    def spectrum_settings(self) -> SpectrumSettings:
+        try:
+            unwrap_discont = float(self.unwrap_discont.get() or math.pi)
+        except ValueError:
+            unwrap_discont = math.pi
+        try:
+            nfft = int(self.nfft_text.get()) if self.nfft_text.get().strip() else 0
+        except ValueError:
+            nfft = 0
+        try:
+            freq_res = float(self.freq_res_text.get()) if self.freq_res_text.get().strip() else 0.0
+        except ValueError:
+            freq_res = 0.0
+        return SpectrumSettings(
+            unwrap_phase=bool(self.unwrap_phase.get()),
+            unwrap_discont_rad=unwrap_discont,
+            detrend=self.detrend_mode.get(),
+            window=self.window_name.get(),
+            nfft=nfft,
+            frequency_resolution_hz=freq_res,
+        )
+
+    def log_raw_snapshot_once(self, bpm: str, expr: str, phasors: Mapping[str, np.ndarray], z: np.ndarray) -> None:
+        if not self.log_raw_snapshots.get():
+            return
+        key = (bpm, expr)
+        if key in self.logged_raw_snapshots:
+            return
+        self.logged_raw_snapshots.add(key)
+        try:
+            snapshot_dir = self.app.session.session_dir / "raw_snapshots"
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            stamp = _dt.datetime.now().strftime("%H%M%S_%f")
+            safe_expr = re.sub(r"[^A-Za-z0-9_.+-]+", "_", expr)[:40]
+            path = snapshot_dir / f"{stamp}_{bpm}_{safe_expr}.npz"
+            limit = min(z.size, 4096)
+            arrays = {f"{button}_complex": value[:limit] for button, value in phasors.items()}
+            arrays["combined"] = z[:limit]
+            arrays["raw_phase"] = np.angle(z[:limit])
+            arrays["unwrapped_phase"] = np.unwrap(np.angle(z[:limit]))
+            np.savez_compressed(path, **arrays)
+            self.app.session.event("raw_snapshot_saved", bpm=bpm, expression=expr, path=str(path), samples=limit)
+        except Exception as exc:
+            self.app.session.event("raw_snapshot_error", bpm=bpm, expression=expr, error=str(exc))
+
     def refresh(self) -> None:
         if not self.running and self.live.get():
             return
@@ -593,6 +737,8 @@ class PlotWindow(tk.Toplevel):
         self.figure.clear()
         if kind == "all":
             axes = [self.figure.add_subplot(221), self.figure.add_subplot(222), self.figure.add_subplot(223), self.figure.add_subplot(224)]
+        elif kind == "phase debug":
+            axes = [self.figure.add_subplot(411), self.figure.add_subplot(412), self.figure.add_subplot(413), self.figure.add_subplot(414)]
         elif kind == "spectra":
             axes = [self.figure.add_subplot(211), self.figure.add_subplot(212)]
         elif kind == "phase spectrum":
@@ -607,6 +753,7 @@ class PlotWindow(tk.Toplevel):
         buttons_needed = sorted(set(button for expr in expressions for button in normalize_button_tokens(expr)))
         if kind in ("position-like", "raw buttons"):
             buttons_needed = list(BUTTONS)
+        settings = self.spectrum_settings()
         self.last_data = {}
         self.last_errors = {}
         tune_markers = self.app.current_tune_markers(include_harmonics=self.show_harmonics.get()) if self.show_tunes.get() else []
@@ -643,12 +790,15 @@ class PlotWindow(tk.Toplevel):
                     self.last_errors[f"{bpm} {expr}"] = message
                     self.app.session.event("expression_error", bpm=bpm, expression=expr, error=message)
                     continue
-                phase = np.unwrap(np.angle(z))
+                phase_steps = phase_pipeline(z, settings)
+                phase = phase_steps["phase"]
                 mag = np.abs(z)
                 label = bpm if len(expressions) == 1 else f"{bpm} {expr}"
                 self.last_data[bpm][f"combined_{expr}"] = z
+                self.last_data[bpm][f"raw_phase_{expr}"] = phase_steps["raw_phase"]
                 self.last_data[bpm][f"phase_{expr}"] = phase
                 self.last_data[bpm][f"magnitude_{expr}"] = mag
+                self.log_raw_snapshot_once(bpm, expr, phasors, z)
                 turns = np.arange(z.size)
 
                 if kind == "I/Q":
@@ -675,22 +825,26 @@ class PlotWindow(tk.Toplevel):
                     axes[0].plot(turns, value, label=label)
                     axes[0].set_ylabel("Re(combination / sum), uncalibrated")
                 elif kind == "phase spectrum":
-                    f, p = spectrum(phase, self.app.cfg.sample_rate_hz)
+                    phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    f, p = phase_spec["frequency_hz"], phase_spec["psd"]
                     axes[0].semilogy(f, np.maximum(p, 1e-30), label=label)
                     axes[0].set_xlabel("frequency [Hz]")
                     axes[0].set_ylabel("phase PSD [arb.]")
                     axes[0].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                 elif kind == "magnitude spectrum":
                     axes[0].plot(turns, mag, label=label)
-                    f, p = spectrum(mag, self.app.cfg.sample_rate_hz)
+                    mag_spec = spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
+                    f, p = mag_spec["frequency_hz"], mag_spec["psd"]
                     axes[1].semilogy(f, np.maximum(p, 1e-30), label=label)
                     axes[0].set_ylabel("|phasor|")
                     axes[1].set_xlabel("frequency [Hz]")
                     axes[1].set_ylabel("magnitude PSD [arb.]")
                     axes[1].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                 elif kind == "spectra":
-                    f_phase, p_phase = spectrum(phase, self.app.cfg.sample_rate_hz)
-                    f_mag, p_mag = spectrum(mag, self.app.cfg.sample_rate_hz)
+                    phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    mag_spec = spectrum_pipeline(mag, self.app.cfg.sample_rate_hz, settings)
+                    f_phase, p_phase = phase_spec["frequency_hz"], phase_spec["psd"]
+                    f_mag, p_mag = mag_spec["frequency_hz"], mag_spec["psd"]
                     axes[0].semilogy(f_phase, np.maximum(p_phase, 1e-30), label=label)
                     axes[1].semilogy(f_mag, np.maximum(p_mag, 1e-30), label=label)
                     axes[0].set_ylabel("phase PSD [arb.]")
@@ -698,11 +852,25 @@ class PlotWindow(tk.Toplevel):
                     axes[1].set_xlabel("frequency [Hz]")
                     axes[0].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                     axes[1].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
+                elif kind == "phase debug":
+                    phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    axes[0].plot(turns, phase_steps["raw_phase"], label=label)
+                    axes[1].plot(turns, phase, label=label)
+                    axes[2].plot(turns, phase_spec["detrended"], label=label)
+                    axes[2].plot(turns, phase_spec["windowed"], label=f"{label} windowed", alpha=0.65, linestyle="--")
+                    axes[3].semilogy(phase_spec["frequency_hz"], np.maximum(phase_spec["psd"], 1e-30), label=label)
+                    axes[0].set_ylabel("angle(z) [rad]")
+                    axes[1].set_ylabel("phase [rad]")
+                    axes[2].set_ylabel("detrended/windowed")
+                    axes[3].set_ylabel("PSD")
+                    axes[3].set_xlabel("frequency [Hz]")
+                    axes[3].set_xlim(0, self.app.cfg.sample_rate_hz / 2)
                 else:  # all
                     axes[0].plot(turns, z.real, label=label)
                     axes[1].plot(turns, z.imag, label=label)
                     axes[2].plot(turns, phase, label=label)
-                    f, p = spectrum(phase, self.app.cfg.sample_rate_hz)
+                    phase_spec = spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    f, p = phase_spec["frequency_hz"], phase_spec["psd"]
                     axes[3].semilogy(f, np.maximum(p, 1e-30), label=label)
                     axes[0].set_title("I")
                     axes[1].set_title("Q")
@@ -735,6 +903,7 @@ class PlotWindow(tk.Toplevel):
                 kind == "phase spectrum"
                 or (kind == "magnitude spectrum" and index == 1)
                 or kind == "spectra"
+                or (kind == "phase debug" and index == 3)
                 or (kind == "all" and index == len(axes) - 1)
             )
             if tune_markers and is_spectrum_axis:
@@ -983,7 +1152,10 @@ class BPMViewer:
         buttons = ttk.Frame(main)
         buttons.grid(row=2, column=1, sticky="new", padx=(10, 0))
         ttk.Button(buttons, text="Open selected plot", command=self.open_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Select all BPMs", command=self.select_all_bpms).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Select visible/filter", command=self.select_visible_bpms).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Select known BPMs", command=self.select_known_bpms).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Clear selection", command=self.clear_bpm_selection).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
@@ -1061,6 +1233,21 @@ class BPMViewer:
 
     def selected_names(self) -> List[str]:
         return [self.displayed_bpm_names[i] for i in self.listbox.curselection()]
+
+    def select_visible_bpms(self) -> None:
+        self.listbox.selection_clear(0, tk.END)
+        if self.displayed_bpm_names:
+            self.listbox.selection_set(0, len(self.displayed_bpm_names) - 1)
+        self.status.set(f"Selected {len(self.displayed_bpm_names)} visible BPM(s).")
+
+    def select_all_bpms(self) -> None:
+        self.search.set("")
+        self.populate_bpms()
+        self.select_visible_bpms()
+
+    def clear_bpm_selection(self) -> None:
+        self.listbox.selection_clear(0, tk.END)
+        self.status.set("Cleared BPM selection.")
 
     def known_bpms(self) -> List[BPMInfo]:
         known = [bpm for bpm in self.cfg.bpms if bpm.known_orbit_pvs]

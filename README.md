@@ -215,18 +215,20 @@ For now these are read-only. Later, write controls can be added behind explicit 
 1. Start with `python3 bpm_iq_viewer.py --safe`.
 2. The GUI preselects known BPMs and opens an initial raw-button plot for the first two known BPMs. Use `--no-startup-plot` if you want an empty workspace.
 3. Select another BPM, for example `BPMZ1L2RP`, or click `Select known BPMs`. Starred BPMs have orbit PV names seen in local `betagui`/CS-Studio material.
-4. First inspect individual buttons with expressions `A`, `B`, `C`, `D`.
-5. Use `raw buttons` plot mode to compare all I/Q traces.
-6. Use `A+B+C+D` for common mode.
-7. Try `spectra` to see phase and magnitude spectra together.
-8. Toggle `Tunes` and `Harmonics` in plot windows to overlay live tune marker lines.
-9. Use the `BPM overlays` panel in each plot window to add BPMs, add the main-window selection, and toggle individual BPM traces on/off without closing the viewer.
-10. Use the Matplotlib toolbar under the plot to pan, zoom, and move around spectra or turn-by-turn traces.
-11. Enter multiple expressions separated by semicolons, for example `A+B+C+D; A-B; (A+B)-(C+D)`.
-12. Try difference expressions only as uncalibrated diagnostics until button geometry is confirmed.
-13. Open the lattice view to select BPMs by ring position and candidate `rdX`/`rdY` PV names.
-14. Use `PV probe / edit IDs` when a PV looks wrong, then click `Save config`.
-15. Check logs after any red PV status or plot error.
+4. Use `Select all BPMs` for the full configured ring list or type in the search box and use `Select visible/filter`.
+5. First inspect individual buttons with expressions `A`, `B`, `C`, `D`.
+6. Use `raw buttons` plot mode to compare all I/Q traces.
+7. Use `A+B+C+D` for common mode.
+8. Try `phase debug` before trusting a spectrum; it shows every step in the phase-spectrum calculation.
+9. Try `spectra` to see phase and magnitude spectra together.
+10. Toggle `Tunes` and `Harmonics` in plot windows to overlay live tune marker lines.
+11. Use the `BPM overlays` panel in each plot window to add BPMs, add the main-window selection, and toggle individual BPM traces on/off without closing the viewer.
+12. Use the Matplotlib toolbar under the plot to pan, zoom, and move around spectra or turn-by-turn traces.
+13. Enter multiple expressions separated by semicolons, for example `A+B+C+D; A-B; (A+B)-(C+D)`.
+14. Try difference expressions only as uncalibrated diagnostics until button geometry is confirmed.
+15. Open the lattice view to select BPMs by ring position and candidate `rdX`/`rdY` PV names.
+16. Use `PV probe / edit IDs` when a PV looks wrong, then click `Save config`.
+17. Check logs after any red PV status or plot error.
 
 Useful expressions:
 
@@ -256,10 +258,32 @@ Available plot modes:
 - `phase spectrum`: FFT power spectrum of unwrapped phase.
 - `magnitude spectrum`: magnitude versus turn plus FFT power spectrum of magnitude.
 - `spectra`: phase and magnitude spectra together.
+- `phase debug`: wrapped phase, unwrapped phase, detrended/windowed phase, and PSD.
 - `position-like`: `Re(expression / (A+B+C+D))`, uncalibrated.
 - `all`: compact overview of I, Q, phase, and phase spectrum.
 
 Spectrum modes can overlay tune markers and harmonics. Markers are based on live read-only tune PVs. If a tune PV is broken or out of range, the marker is skipped and the error is logged.
+
+Each plot window has editable FFT/phase settings:
+
+- `unwrap(angle)`: matches the MATLAB `unwrap(angle(iq))` step.
+- `unwrap jump rad`: phase jump threshold, default `pi`.
+- `detrend`: `linear` matches MATLAB `detrend(...)`; `constant` removes only the mean; `none` leaves the signal as-is.
+- `window`: `hann`, `hamming`, `blackman`, or `rectangular`.
+- `NFFT`: explicit FFT length, blank means use the waveform length unless `df Hz` is set.
+- `df Hz`: requested frequency bin spacing, for example `1000` approximates the old `FrequencyResolution`, by choosing `NFFT = ceil(sample_rate / df)`.
+- `log first raw snapshot`: stores a bounded `.npz` file in the session log directory for the first successful BPM/expression read.
+
+The phase spectrum path is now:
+
+```text
+z[n] = expression over A/B/C/D
+raw_phase[n] = angle(z[n])
+phase[n] = unwrap(raw_phase[n])
+detrended[n] = detrend(phase[n])
+windowed[n] = window[n] * detrended[n]
+PSD = abs(rfft(windowed, nfft))^2 / sum(window^2)
+```
 
 ## Theory
 
