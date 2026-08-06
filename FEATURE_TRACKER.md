@@ -21,6 +21,9 @@ This file tracks requested control-room BPM viewer work so implementation status
 - Real control-room BPM snapshot is included as a regression fixture.
 - Unit tests cover phase unwrap, MATLAB-style phase spectrum, FFT settings, TBT commands, and snapshot spectrum regression.
 - Session logs include events and bounded raw snapshots for debugging.
+- Core math/config/PV helpers are split into `bpm_core.py`; Tk/EPICS app code remains in `bpm_iq_viewer.py`.
+- Plot windows cache recent raw phasor reads briefly so UI-only redraws do not immediately re-read EPICS.
+- Documentation is split into README, quickstart, theory, and reference docs.
 
 ## Partially Implemented
 
@@ -35,4 +38,5 @@ This file tracks requested control-room BPM viewer work so implementation status
 - Calibrated longitudinal phase-to-time conversion using confirmed DDC/RF reference frequency.
 - Multi-BPM dispersion/phase-space reconstruction.
 - Persistent user layout/workspace presets.
+- Full GUI integration tests on a working Tk display.
 - Operator-reviewed production safety certification.

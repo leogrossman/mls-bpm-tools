@@ -16,9 +16,8 @@ import math
 import re
 import subprocess
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -83,64 +82,31 @@ try:
 except ImportError:
     epics = None
 
-
-DEFAULT_SAMPLE_RATE = 6.25e6
-BUTTONS = ("A", "B", "C", "D")
-DEFAULT_LOG_ROOT = Path(".mls_bpm_local") / "logs"
-COMBINATION_PRESETS = (
-    ("A", "A"),
-    ("Sum A+B+C+D", "A+B+C+D"),
-    ("B", "B"),
-    ("C", "C"),
-    ("D", "D"),
-    ("Horizontal diff", "(A+B)-(C+D)"),
-    ("Vertical diff", "(A+D)-(B+C)"),
-    ("Mean", "mean(A,B,C,D)"),
+from bpm_core import (
+    BUTTONS,
+    COMBINATION_PRESETS,
+    AppConfig,
+    BPMInfo,
+    Backend,
+    DemoBackend,
+    SpectrumSettings,
+    StatusPV,
+    TunePV,
+    combine_selected_expressions,
+    combination_expression,
+    nearest_bpm_marker,
+    normalize_button_tokens,
+    parse_expressions,
+    phase_pipeline,
+    pv_for,
+    read_button_phasors,
+    spectrum_pipeline,
+    tbt_scan_commands,
+    tune_markers_from_values,
+    tune_value_to_frequency,
 )
 
-
-@dataclass
-class BPMInfo:
-    name: str
-    s_m: float = 0.0
-    section: str = ""
-    dispersion_x_m: float = 0.0
-    beta_x_m: float = math.nan
-    beta_y_m: float = math.nan
-    x_pv: str = ""
-    y_pv: str = ""
-    known_orbit_pvs: bool = False
-    modes: List[str] = field(default_factory=lambda: ["user", "low_alpha"])
-
-
-@dataclass
-class StatusPV:
-    label: str
-    pv: str
-    on_values: List[str] = field(default_factory=lambda: ["1", "ON", "On", "on"])
-    direction: str = ""
-    excitation: str = ""
-    enabled: bool = True
-
-
-@dataclass
-class TunePV:
-    label: str
-    pv: str
-    color: str
-    unit: str = "auto"
-    harmonics: int = 4
-    enabled: bool = True
-
-
-@dataclass
-class SpectrumSettings:
-    unwrap_phase: bool = True
-    unwrap_discont_rad: float = math.pi
-    detrend: str = "linear"
-    window: str = "hann"
-    nfft: int = 0
-    frequency_resolution_hz: float = 0.0
+DEFAULT_LOG_ROOT = Path(".mls_bpm_local") / "logs"
 
 
 class SessionLogger:
@@ -159,75 +125,6 @@ class SessionLogger:
                 handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
         except Exception:
             logging.exception("Failed to write structured event: %s", event_type)
-
-
-@dataclass
-class AppConfig:
-    bpms: List[BPMInfo]
-    pv_templates: Dict[str, str]
-    status_pvs: List[StatusPV] = field(default_factory=list)
-    tune_pvs: List[TunePV] = field(default_factory=list)
-    sample_rate_hz: float = DEFAULT_SAMPLE_RATE
-    ddc_frequency_hz: Optional[float] = None
-    refresh_ms: int = 1000
-    epics_array_timeout_s: float = 2.0
-    epics_scalar_timeout_s: float = 0.25
-    raw_scan_on_value: str = "1 second"
-    raw_scan_off_value: str = "Passive"
-    source_path: Optional[Path] = None
-
-    @classmethod
-    def load(cls, path: Path) -> "AppConfig":
-        raw = json.loads(path.read_text())
-        bpms = [BPMInfo(**item) for item in raw["bpms"]]
-        return cls(
-            bpms=bpms,
-            pv_templates=raw["pv_templates"],
-            status_pvs=[StatusPV(**item) for item in raw.get("status_pvs", [])],
-            tune_pvs=[TunePV(**item) for item in raw.get("tune_pvs", [])],
-            sample_rate_hz=float(raw.get("sample_rate_hz", DEFAULT_SAMPLE_RATE)),
-            ddc_frequency_hz=raw.get("ddc_frequency_hz"),
-            refresh_ms=int(raw.get("refresh_ms", 1000)),
-            epics_array_timeout_s=float(raw.get("epics_array_timeout_s", 2.0)),
-            epics_scalar_timeout_s=float(raw.get("epics_scalar_timeout_s", 0.25)),
-            raw_scan_on_value=str(raw.get("raw_scan_on_value", "1 second")),
-            raw_scan_off_value=str(raw.get("raw_scan_off_value", "Passive")),
-            source_path=path,
-        )
-
-    def to_dict(self) -> Dict[str, object]:
-        return {
-            "sample_rate_hz": self.sample_rate_hz,
-            "ddc_frequency_hz": self.ddc_frequency_hz,
-            "refresh_ms": self.refresh_ms,
-            "epics_array_timeout_s": self.epics_array_timeout_s,
-            "epics_scalar_timeout_s": self.epics_scalar_timeout_s,
-            "raw_scan_on_value": self.raw_scan_on_value,
-            "raw_scan_off_value": self.raw_scan_off_value,
-            "pv_templates": self.pv_templates,
-            "tune_pvs": [item.__dict__ for item in self.tune_pvs],
-            "status_pvs": [item.__dict__ for item in self.status_pvs],
-            "bpms": [item.__dict__ for item in self.bpms],
-        }
-
-    def save(self, path: Optional[Path] = None) -> Path:
-        target = path or self.source_path
-        if target is None:
-            raise RuntimeError("No config path is known")
-        target.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=False) + "\n", encoding="utf-8")
-        self.source_path = target
-        return target
-
-
-class Backend:
-    def get_array(self, pv: str) -> np.ndarray:
-        raise NotImplementedError
-
-    def get_value(self, pv: str) -> object:
-        raise NotImplementedError
-
-    def put(self, pv: str, value: object) -> None:
-        raise NotImplementedError
 
 
 class EpicsBackend(Backend):
@@ -262,253 +159,6 @@ class EpicsBackend(Backend):
         ok = epics.caput(pv, value, wait=True, timeout=self.array_timeout)
         if ok is None or ok == 0:
             raise RuntimeError(f"Write failed: {pv} <- {value!r}")
-
-
-class DemoBackend(Backend):
-    """Synthetic data for development outside the control room."""
-    def __init__(self, n: int = 8192, fs: float = DEFAULT_SAMPLE_RATE):
-        self.n = n
-        self.fs = fs
-        self.phase = 0.0
-
-    def get_array(self, pv: str) -> np.ndarray:
-        seed = abs(hash(pv)) % (2**32)
-        rng = np.random.default_rng(seed)
-        n = np.arange(self.n)
-        f_syn = 13_500.0
-        q = 0.15 * np.sin(2 * np.pi * f_syn * n / self.fs + self.phase)
-        q += 0.02 * rng.normal(size=self.n)
-        amp = 1.0 + 0.03 * np.sin(2 * np.pi * 42_000 * n / self.fs)
-        button_scale = 1.0 + 0.08 * ((seed % 7) - 3) / 3
-        z = button_scale * amp * np.exp(1j * q)
-        self.phase += 0.05
-        return z.imag if pv.endswith(("Qa", "Qb", "Qc", "Qd")) else z.real
-
-    def get_value(self, pv: str) -> object:
-        seed = abs(hash(pv)) % 11
-        if "TUNEZRP:MEASX" in pv.upper():
-            return 0.1779
-        if "TUNEZRP:MEASY" in pv.upper():
-            return 0.22
-        if "TUNEZRP:MEASZ" in pv.upper():
-            return 0.0065
-        if "TYPE" in pv.upper():
-            return ("off", "phase", "amplitude", "chirp")[seed % 4]
-        return int(seed % 3 == 0)
-
-    def put(self, pv: str, value: object) -> None:
-        logging.info("DEMO write: %s <- %r", pv, value)
-
-
-def pv_for(cfg: AppConfig, bpm: str, key: str, button: Optional[str] = None) -> str:
-    template = cfg.pv_templates[key]
-    return template.format(bpm=bpm, button=(button or "").lower(), BUTTON=(button or "").upper())
-
-
-def normalize_button_tokens(expr: str) -> List[str]:
-    return sorted(set(re.findall(r"\b[ABCD]\b", expr.upper())))
-
-
-def read_button_phasors(backend: Backend, cfg: AppConfig, bpm: str, buttons: Iterable[str]) -> Dict[str, np.ndarray]:
-    out: Dict[str, np.ndarray] = {}
-    for button in buttons:
-        i_pv = pv_for(cfg, bpm, "i", button)
-        q_pv = pv_for(cfg, bpm, "q", button)
-        i = backend.get_array(i_pv)
-        q = backend.get_array(q_pv)
-        n = min(i.size, q.size)
-        out[button] = i[:n] + 1j * q[:n]
-    if not out:
-        raise RuntimeError("No buttons selected")
-    n_min = min(v.size for v in out.values())
-    return {k: v[:n_min] for k, v in out.items()}
-
-
-def tbt_scan_commands(cfg: AppConfig, names: Sequence[str], enabled: bool) -> List[Tuple[str, object]]:
-    value = cfg.raw_scan_on_value if enabled else cfg.raw_scan_off_value
-    commands: List[Tuple[str, object]] = []
-    for bpm in names:
-        commands.append((pv_for(cfg, bpm, "scan"), value))
-        if cfg.pv_templates.get("synth_scan"):
-            commands.append((pv_for(cfg, bpm, "synth_scan"), value))
-    return commands
-
-
-def combination_expression(data: Mapping[str, np.ndarray], expr: str) -> np.ndarray:
-    """Evaluate a deliberately tiny safe expression language.
-
-    Examples: A, A+B+C+D, (A+B)-(C+D), A-B, mean(A,B,C,D)
-    """
-    expr = re.sub(r"\b([abcd])\b", lambda match: match.group(1).upper(), expr.strip())
-    env = {k: np.asarray(v) for k, v in data.items()}
-    env["mean"] = lambda *args: np.mean(np.vstack(args), axis=0)
-    env["sum"] = lambda *args: np.sum(np.vstack(args), axis=0)
-    env["conj"] = np.conjugate
-    env["real"] = np.real
-    env["imag"] = np.imag
-    env["abs"] = np.abs
-    allowed = set("ABCDmeanumsconjrealigab()+-*/, .")
-    if any(ch not in allowed for ch in expr):
-        raise ValueError("Expression supports A/B/C/D, mean(), sum(), abs(), real(), imag(), conj(), +, -, *, / and parentheses")
-    try:
-        value = eval(expr, {"__builtins__": {}}, env)  # noqa: S307 - restricted grammar/env
-    except Exception as exc:
-        raise ValueError(f"Invalid combination: {expr}") from exc
-    arr = np.asarray(value, dtype=complex).ravel()
-    if arr.size == 0:
-        raise ValueError("Combination produced no data")
-    return arr
-
-
-def spectrum(x: np.ndarray, fs: float) -> Tuple[np.ndarray, np.ndarray]:
-    result = spectrum_pipeline(x, fs, SpectrumSettings())
-    return result["frequency_hz"], result["psd"]
-
-
-def phase_pipeline(z: np.ndarray, settings: SpectrumSettings) -> Dict[str, np.ndarray]:
-    z = np.asarray(z, dtype=complex).ravel()
-    raw_phase = np.angle(z)
-    if settings.unwrap_phase:
-        phase = np.unwrap(raw_phase, discont=max(settings.unwrap_discont_rad, 1e-12))
-    else:
-        phase = raw_phase.copy()
-    return {"raw_phase": raw_phase, "phase": phase}
-
-
-def _detrend_signal(x: np.ndarray, mode: str) -> np.ndarray:
-    x = np.asarray(x, dtype=float).ravel()
-    x = np.nan_to_num(x, nan=np.nanmean(x) if np.any(np.isfinite(x)) else 0.0)
-    mode = mode.lower()
-    if mode in ("none", "off"):
-        return x.copy()
-    if mode in ("constant", "mean"):
-        return x - np.mean(x)
-    if mode == "linear":
-        if x.size < 2:
-            return x - np.mean(x)
-        turns = np.arange(x.size, dtype=float)
-        coeff = np.polyfit(turns, x, 1)
-        return x - np.polyval(coeff, turns)
-    raise ValueError(f"Unsupported detrend mode: {mode}")
-
-
-def _window_values(n: int, name: str) -> np.ndarray:
-    name = name.lower()
-    if name in ("none", "rect", "rectangular", "boxcar"):
-        return np.ones(n)
-    if name in ("hann", "hanning"):
-        return np.hanning(n)
-    if name == "hamming":
-        return np.hamming(n)
-    if name == "blackman":
-        return np.blackman(n)
-    raise ValueError(f"Unsupported FFT window: {name}")
-
-
-def _resolve_nfft(n_samples: int, fs: float, settings: SpectrumSettings) -> int:
-    if settings.frequency_resolution_hz > 0:
-        nfft = int(math.ceil(fs / settings.frequency_resolution_hz))
-    elif settings.nfft > 0:
-        nfft = int(settings.nfft)
-    else:
-        nfft = n_samples
-    return max(n_samples, nfft, 1)
-
-
-def spectrum_pipeline(x: np.ndarray, fs: float, settings: SpectrumSettings) -> Dict[str, np.ndarray]:
-    raw = np.asarray(x, dtype=float).ravel()
-    if raw.size == 0:
-        raise ValueError("Cannot spectrum empty signal")
-    detrended = _detrend_signal(raw, settings.detrend)
-    window = _window_values(detrended.size, settings.window)
-    windowed = np.nan_to_num(detrended) * window
-    nfft = _resolve_nfft(detrended.size, fs, settings)
-    spec = np.fft.rfft(windowed, n=nfft)
-    freq = np.fft.rfftfreq(nfft, d=1.0 / fs)
-    psd = (np.abs(spec) ** 2) / max(np.sum(window**2), 1.0)
-    return {
-        "raw": raw,
-        "detrended": detrended,
-        "window": window,
-        "windowed": windowed,
-        "frequency_hz": freq,
-        "spectrum": spec,
-        "psd": psd,
-    }
-
-
-def parse_expressions(text: str) -> List[str]:
-    expressions = [item.strip() for item in re.split(r"[;\n]", text) if item.strip()]
-    return expressions or ["A+B+C+D"]
-
-
-def combine_selected_expressions(presets: Sequence[str], custom: str = "", use_custom: bool = False) -> str:
-    expressions = [expr.strip() for expr in presets if expr.strip()]
-    if use_custom:
-        expressions.extend(parse_expressions(custom))
-    seen: set = set()
-    unique = []
-    for expr in expressions:
-        if expr not in seen:
-            unique.append(expr)
-            seen.add(expr)
-    return "; ".join(unique or ["A", "A+B+C+D"])
-
-
-def tune_value_to_frequency(value: object, fs: float, unit: str = "auto") -> Optional[Tuple[float, float]]:
-    try:
-        numeric = float(np.asarray(value).ravel()[0])
-    except Exception:
-        return None
-    if not np.isfinite(numeric) or numeric <= 0:
-        return None
-    unit = unit.lower()
-    if unit == "tune" or (unit == "auto" and numeric <= 1.0):
-        tune = numeric
-        freq = numeric * fs
-    elif unit == "khz":
-        freq = numeric * 1000.0
-        tune = freq / fs
-    else:
-        freq = numeric
-        tune = freq / fs
-    if freq <= 0 or freq > fs / 2:
-        return None
-    return freq, tune
-
-
-def tune_markers_from_values(tunes: Mapping[str, Mapping[str, object]], fs: float, include_harmonics: bool) -> List[Tuple[float, str, str]]:
-    markers: List[Tuple[float, str, str]] = []
-    for label, info in tunes.items():
-        converted = tune_value_to_frequency(info.get("value"), fs, str(info.get("unit", "auto")))
-        if converted is None:
-            continue
-        base_freq, tune = converted
-        color = str(info.get("color", "0.35"))
-        harmonics = int(info.get("harmonics", 1)) if include_harmonics else 1
-        for harmonic in range(1, max(harmonics, 1) + 1):
-            freq = base_freq * harmonic
-            if freq > fs / 2:
-                break
-            marker_label = f"{label} Q={tune:.4g}" if harmonic == 1 else f"{harmonic}{label}"
-            markers.append((freq, marker_label, color))
-    return markers
-
-
-def nearest_bpm_marker(
-    x: float,
-    y: float,
-    marker_positions: Mapping[str, Tuple[float, float]],
-    max_distance: float = 12.0,
-) -> Optional[str]:
-    best_name: Optional[str] = None
-    best_distance = max_distance
-    for name, (mx, my) in marker_positions.items():
-        distance = math.hypot(float(x) - mx, float(y) - my)
-        if distance <= best_distance:
-            best_name = name
-            best_distance = distance
-    return best_name
 
 
 class PlotWindow(tk.Toplevel):
@@ -548,7 +198,7 @@ class PlotWindow(tk.Toplevel):
         ttk.Checkbutton(controls, text="Harmonics", variable=self.show_harmonics).pack(side=tk.LEFT)
         self.show_legend = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Legend", variable=self.show_legend, command=self.refresh).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(controls, text="Refresh now", command=self.refresh).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Refresh now", command=lambda: self.refresh(force_read=True)).pack(side=tk.LEFT)
         ttk.Button(controls, text="Pause", command=self.toggle_pause).pack(side=tk.LEFT, padx=4)
         ttk.Button(controls, text="Save data", command=self.save_data).pack(side=tk.LEFT, padx=4)
 
@@ -640,6 +290,8 @@ class PlotWindow(tk.Toplevel):
         self.last_data: Dict[str, Dict[str, np.ndarray]] = {}
         self.last_errors: Dict[str, str] = {}
         self.logged_raw_snapshots: set = set()
+        self.phasor_cache: Dict[Tuple[str, Tuple[str, ...]], Tuple[float, Dict[str, np.ndarray]]] = {}
+        self.cache_ttl_s = max(self.app.cfg.refresh_ms / 1000.0 * 0.8, 0.25)
         for bpm in self.bpm_names:
             self.add_bpm(bpm, refresh=False)
         self.rebuild_bpm_rows()
@@ -687,6 +339,7 @@ class PlotWindow(tk.Toplevel):
             self.bpm_enabled[bpm].set(True)
         self.app.session.event("plot_bpm_added", bpm=bpm, bpms=self.bpm_names)
         if refresh:
+            self.phasor_cache.clear()
             self.rebuild_bpm_rows()
             self.refresh()
 
@@ -701,6 +354,7 @@ class PlotWindow(tk.Toplevel):
         for bpm in names:
             self.add_bpm(bpm, refresh=False)
         self.rebuild_bpm_rows()
+        self.phasor_cache.clear()
         self.refresh()
 
     def set_all_bpms(self, enabled: bool) -> None:
@@ -711,6 +365,7 @@ class PlotWindow(tk.Toplevel):
     def remove_disabled_bpms(self) -> None:
         self.bpm_names = [bpm for bpm in self.bpm_names if self.bpm_enabled[bpm].get()]
         self.bpm_enabled = {bpm: self.bpm_enabled[bpm] for bpm in self.bpm_names}
+        self.phasor_cache.clear()
         self.rebuild_bpm_rows()
         self.refresh()
 
@@ -792,11 +447,11 @@ class PlotWindow(tk.Toplevel):
         except Exception as exc:
             self.app.session.event("raw_snapshot_error", bpm=bpm, expression=expr, error=str(exc))
 
-    def refresh(self) -> None:
+    def refresh(self, force_read: bool = False) -> None:
         if not self.running and self.live.get():
             return
         try:
-            self._refresh_impl()
+            self._refresh_impl(force_read=force_read)
         except Exception as exc:
             logging.exception("Plot refresh failed")
             self.status.set(str(exc))
@@ -804,7 +459,17 @@ class PlotWindow(tk.Toplevel):
             if self.running and self.live.get() and self.winfo_exists():
                 self.after_id = self.after(self.app.cfg.refresh_ms, self.refresh)
 
-    def _refresh_impl(self) -> None:
+    def _phasors_for(self, bpm: str, buttons_needed: Sequence[str], force_read: bool) -> Dict[str, np.ndarray]:
+        key = (bpm, tuple(buttons_needed))
+        cached = self.phasor_cache.get(key)
+        now = time.monotonic()
+        if cached and not force_read and now - cached[0] <= self.cache_ttl_s:
+            return cached[1]
+        phasors = read_button_phasors(self.app.backend, self.app.cfg, bpm, buttons_needed)
+        self.phasor_cache[key] = (now, phasors)
+        return phasors
+
+    def _refresh_impl(self, force_read: bool = False) -> None:
         kind = self.plot_kind.get()
         active_bpms = self.active_bpm_names()
         self.update_title()
@@ -843,7 +508,7 @@ class PlotWindow(tk.Toplevel):
             )
         for bpm in active_bpms:
             try:
-                phasors = read_button_phasors(self.app.backend, self.app.cfg, bpm, buttons_needed)
+                phasors = self._phasors_for(bpm, buttons_needed, force_read)
             except Exception as exc:
                 message = str(exc)
                 self.last_errors[bpm] = message
@@ -1262,29 +927,32 @@ class BPMViewer:
         ttk.Button(buttons, text="Help / guide", command=self.show_help).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Quit", command=root.destroy).pack(fill=tk.X, pady=2)
 
-        pv_box = ttk.LabelFrame(main, text="Editable PV templates", padding=8)
-        pv_box.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        details = ttk.Notebook(main)
+        details.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+        pv_tab = ttk.Frame(details, padding=8)
+        details.add(pv_tab, text="PV templates")
         self.pv_template_vars: Dict[str, tk.StringVar] = {}
         for row, key in enumerate(("scan", "synth_scan", "i", "q")):
-            ttk.Label(pv_box, text=key).grid(row=row, column=0, sticky="w")
+            ttk.Label(pv_tab, text=key).grid(row=row, column=0, sticky="w")
             var = tk.StringVar(value=self.cfg.pv_templates.get(key, ""))
             self.pv_template_vars[key] = var
-            ttk.Entry(pv_box, textvariable=var).grid(row=row, column=1, sticky="ew", padx=6, pady=1)
-        ttk.Button(pv_box, text="Apply templates", command=self.apply_pv_templates).grid(row=0, column=2, rowspan=4, sticky="ns")
-        pv_box.columnconfigure(1, weight=1)
+            ttk.Entry(pv_tab, textvariable=var).grid(row=row, column=1, sticky="ew", padx=6, pady=1)
+        ttk.Button(pv_tab, text="Apply templates", command=self.apply_pv_templates).grid(row=0, column=2, rowspan=4, sticky="ns")
+        pv_tab.columnconfigure(1, weight=1)
 
-        self.tune_frame = ttk.LabelFrame(main, text="Read-only tune PVs for spectrum markers", padding=8)
-        self.tune_frame.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.tune_frame = ttk.Frame(details, padding=8)
+        details.add(self.tune_frame, text="Tunes")
         self.tune_rows: List[Tuple[TunePV, tk.StringVar, tk.Label, tk.BooleanVar, tk.StringVar]] = []
         self.build_tune_rows()
 
-        self.status_pv_frame = ttk.LabelFrame(main, text="Read-only excitation / status PVs", padding=8)
-        self.status_pv_frame.grid(row=15, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.status_pv_frame = ttk.Frame(details, padding=8)
+        details.add(self.status_pv_frame, text="Excitation/status")
         self.status_pv_rows: List[Tuple[StatusPV, tk.StringVar, tk.Label, tk.BooleanVar, tk.StringVar]] = []
         self.build_status_pv_rows()
 
-        info = ttk.LabelFrame(main, text="Combination examples", padding=8)
-        info.grid(row=16, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        info = ttk.Frame(details, padding=8)
+        details.add(info, text="Signal guide")
         ttk.Label(
             info,
             justify=tk.LEFT,
@@ -1298,7 +966,7 @@ class BPMViewer:
         ).pack(anchor="w")
 
         self.status = tk.StringVar(value=mode_label)
-        ttk.Label(main, textvariable=self.status).grid(row=17, column=0, columnspan=2, sticky="w", pady=8)
+        ttk.Label(main, textvariable=self.status).grid(row=14, column=0, columnspan=2, sticky="w", pady=8)
 
         main.rowconfigure(5, weight=1)
         main.columnconfigure(0, weight=1)
