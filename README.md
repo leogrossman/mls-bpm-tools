@@ -13,11 +13,35 @@ python3 bpm_iq_viewer.py
 
 No plot opens automatically. Click a BPM marker in the top lattice strip or double-click a BPM row to open a viewer. Machine writes are blocked unless you explicitly run `python3 bpm_iq_viewer.py --live --allow-writes`.
 
-For offline development with synthetic data:
+## Demo On A Non-Control-Room Machine
+
+Use this when you are on a laptop or another machine without access to the MLS EPICS network. Demo mode uses synthetic BPM waveforms and does not connect to PVs.
 
 ```bash
+git clone https://github.com/leogrossman/mls-bpm-tools.git
+cd mls-bpm-tools
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 python3 bpm_iq_viewer.py --demo
 ```
+
+If `tkinter` is missing, install the Python/Tk package for your platform. On macOS, the system Python usually includes it; with Homebrew Python, install/use a Python build that includes Tk.
+
+Optional offline checks:
+
+```bash
+MPLCONFIGDIR=/tmp/mls-bpm-tools-mpl python3 -m unittest discover -v -p 'test_*.py'
+```
+
+When you come back to the control room, use the normal command again:
+
+```bash
+python3 bpm_iq_viewer.py
+```
+
+That command is live read-only safe mode, not demo mode.
 
 ## What Is In This Repo
 
