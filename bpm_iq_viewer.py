@@ -1536,6 +1536,10 @@ class TBTControlWindow(tk.Toplevel):
         self.title("TBT raw logging control")
         self.geometry("980x680")
         self.selected_names: List[str] = []
+        self.capture_after_id: Optional[str] = None
+        self.capture_remaining = 0
+        self.capture_index = 0
+        self.write_armed = tk.BooleanVar(value=False)
 
         top = ttk.Frame(self, padding=8)
         top.pack(fill=tk.X)
@@ -1549,6 +1553,11 @@ class TBTControlWindow(tk.Toplevel):
             justify=tk.LEFT,
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(top, text="Load main selection", command=self.load_main_selection).pack(side=tk.RIGHT, padx=3)
+        self.write_lamp = tk.Label(top, text="", width=18, relief=tk.GROOVE)
+        self.write_lamp.pack(side=tk.RIGHT, padx=6)
+        self.write_toggle = ttk.Checkbutton(top, text="Arm write mode", variable=self.write_armed, command=self.update_write_lamp)
+        self.write_toggle.pack(side=tk.RIGHT, padx=3)
+        self.update_write_lamp()
 
         controls = ttk.LabelFrame(self, text="Limited selection", padding=8)
         controls.pack(fill=tk.X, padx=8, pady=(0, 8))
@@ -1567,6 +1576,25 @@ class TBTControlWindow(tk.Toplevel):
             justify=tk.LEFT,
         ).grid(row=1, column=0, columnspan=6, sticky="w", pady=(6, 0))
         controls.columnconfigure(5, weight=1)
+
+        capture = ttk.LabelFrame(self, text="Read-only raw data capture", padding=8)
+        capture.pack(fill=tk.X, padx=8, pady=(0, 8))
+        ttk.Label(capture, text="captures").grid(row=0, column=0, sticky="w")
+        self.capture_count_text = tk.StringVar(value="1")
+        ttk.Entry(capture, textvariable=self.capture_count_text, width=8).grid(row=0, column=1, sticky="w", padx=(4, 12))
+        ttk.Label(capture, text="interval s").grid(row=0, column=2, sticky="w")
+        self.capture_interval_text = tk.StringVar(value="3")
+        ttk.Entry(capture, textvariable=self.capture_interval_text, width=8).grid(row=0, column=3, sticky="w", padx=(4, 12))
+        ttk.Button(capture, text="Capture raw arrays now", command=self.capture_once).grid(row=0, column=4, sticky="ew", padx=3)
+        ttk.Button(capture, text="Start capture series", command=self.start_capture_series).grid(row=0, column=5, sticky="ew", padx=3)
+        ttk.Button(capture, text="Stop capture series", command=self.stop_capture_series).grid(row=0, column=6, sticky="ew", padx=3)
+        ttk.Label(
+            capture,
+            text="This only reads the selected BPM I/Q waveform PVs and writes .npz files under the session log directory. It works in read-only mode.",
+            wraplength=820,
+            justify=tk.LEFT,
+        ).grid(row=1, column=0, columnspan=7, sticky="w", pady=(6, 0))
+        capture.columnconfigure(6, weight=1)
 
         body = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
@@ -1591,6 +1619,20 @@ class TBTControlWindow(tk.Toplevel):
 
         self.load_main_selection()
 
+    def destroy(self) -> None:
+        self.stop_capture_series()
+        super().destroy()
+
+    def update_write_lamp(self) -> None:
+        if not self.app.can_write_machine:
+            self.write_armed.set(False)
+            self.write_lamp.configure(text="SAFE read-only", bg="#c9c9c9", fg="#202020")
+            return
+        if self.write_armed.get():
+            self.write_lamp.configure(text="WRITES ARMED", bg="#d65f5f", fg="white")
+        else:
+            self.write_lamp.configure(text="writes disarmed", bg="#f0d68a", fg="#202020")
+
     def max_bpms(self) -> int:
         try:
             value = int(self.max_bpms_text.get())
@@ -1604,6 +1646,20 @@ class TBTControlWindow(tk.Toplevel):
         except ValueError:
             value = 30
         return min(max(value, 1), 600)
+
+    def capture_count(self) -> int:
+        try:
+            value = int(self.capture_count_text.get())
+        except ValueError:
+            value = 1
+        return min(max(value, 1), 100)
+
+    def capture_interval_ms(self) -> int:
+        try:
+            value = float(self.capture_interval_text.get())
+        except ValueError:
+            value = 3.0
+        return int(round(min(max(value, 0.1), 3600.0) * 1000.0))
 
     def set_bpms(self, names: Sequence[str]) -> None:
         known = [name for name in names if name in self.app.bpm_by_name]
@@ -1681,9 +1737,122 @@ class TBTControlWindow(tk.Toplevel):
         lines = [f"caput {pv!r} {value!r}" for pv, value in commands]
         lines.append("")
         lines.append(f"Auto-stop setting: {self.auto_stop_seconds()} s")
-        lines.append(f"Write mode: {'ENABLED' if self.app.can_write_machine else 'BLOCKED/SAFE'}")
+        lines.append(f"Write mode: {self.write_mode_text()}")
         self.write_status("\n".join(lines))
         self.app.session.event("tbt_control_preview", bpms=names, commands=[{"pv": pv, "value": value} for pv, value in commands])
+
+    def write_mode_text(self) -> str:
+        if not self.app.can_write_machine:
+            return "BLOCKED/SAFE"
+        return "ARMED" if self.write_armed.get() else "DISARMED"
+
+    def require_write_armed(self) -> bool:
+        self.update_write_lamp()
+        if not self.app.can_write_machine:
+            messagebox.showwarning(
+                "Writes blocked",
+                "This run is read-only. Restart with:\n\npython3 bpm_iq_viewer.py --live --allow-writes\n\nRaw data capture still works.",
+                parent=self,
+            )
+            return False
+        if not self.write_armed.get():
+            messagebox.showwarning("Writes disarmed", "Turn on the red Arm write mode toggle first.", parent=self)
+            return False
+        return True
+
+    def raw_capture_dir(self) -> Path:
+        path = self.app.session.session_dir / "raw_bpm_logs"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def capture_once(self) -> Optional[Path]:
+        names = self.current_names()
+        if not names:
+            messagebox.showinfo("Select BPM", "Load or select one or more BPMs first.", parent=self)
+            return None
+        self.app.sync_runtime_config()
+        stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        arrays: Dict[str, np.ndarray] = {}
+        metadata: Dict[str, object] = {
+            "timestamp": _dt.datetime.now().isoformat(timespec="milliseconds"),
+            "bpms": list(names),
+            "buttons": list(BUTTONS),
+            "sample_rate_hz": self.app.cfg.sample_rate_hz,
+            "mode_label": self.app.mode_label,
+            "write_mode": self.write_mode_text(),
+        }
+        errors: List[str] = []
+        for bpm in names:
+            try:
+                phasors = read_button_phasors(self.app.backend, self.app.cfg, bpm, BUTTONS)
+                for button, value in phasors.items():
+                    arr = np.asarray(value, dtype=complex).ravel()
+                    arrays[f"{bpm}_{button}_complex"] = arr
+                    arrays[f"{bpm}_{button}_I"] = arr.real
+                    arrays[f"{bpm}_{button}_Q"] = arr.imag
+                arrays[f"{bpm}_sum_complex"] = sum(np.asarray(phasors[button], dtype=complex).ravel() for button in BUTTONS)
+            except Exception as exc:
+                message = f"{bpm}: {exc}"
+                errors.append(message)
+                self.app.session.event("raw_bpm_capture_error", bpm=bpm, error=str(exc))
+        if not arrays:
+            self.write_status("Raw capture failed:\n" + "\n".join(errors))
+            return None
+        metadata["errors"] = errors
+        path = self.raw_capture_dir() / f"raw_bpm_{stamp}_{len(names)}bpms.npz"
+        arrays["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
+        np.savez_compressed(path, **arrays)
+        lines = [
+            f"Saved raw BPM capture: {path}",
+            f"BPMs: {', '.join(names)}",
+            f"Arrays: {len(arrays) - 1}",
+        ]
+        if errors:
+            lines.append("Errors:")
+            lines.extend(errors)
+        self.write_status("\n".join(lines))
+        self.app.session.event("raw_bpm_capture_saved", path=str(path), bpms=names, arrays=len(arrays) - 1, errors=errors)
+        return path
+
+    def start_capture_series(self) -> None:
+        self.stop_capture_series()
+        self.capture_remaining = self.capture_count()
+        self.capture_index = 0
+        self.app.session.event(
+            "raw_bpm_capture_series_started",
+            bpms=self.current_names(),
+            captures=self.capture_remaining,
+            interval_ms=self.capture_interval_ms(),
+        )
+        self._capture_series_step()
+
+    def _capture_series_step(self) -> None:
+        if self.capture_remaining <= 0:
+            self.capture_after_id = None
+            self.append_status("\nCapture series finished.")
+            self.app.session.event("raw_bpm_capture_series_finished")
+            return
+        self.capture_index += 1
+        self.capture_remaining -= 1
+        path = self.capture_once()
+        if path is not None:
+            self.append_status(f"\nCapture {self.capture_index} saved.")
+        if self.capture_remaining > 0:
+            self.capture_after_id = self.after(self.capture_interval_ms(), self._capture_series_step)
+        else:
+            self.capture_after_id = None
+            self.append_status("\nCapture series finished.")
+            self.app.session.event("raw_bpm_capture_series_finished")
+
+    def stop_capture_series(self) -> None:
+        if self.capture_after_id:
+            try:
+                self.after_cancel(self.capture_after_id)
+            except Exception:
+                pass
+            self.capture_after_id = None
+            self.app.session.event("raw_bpm_capture_series_stopped", completed=self.capture_index)
+        self.capture_remaining = 0
 
     def start_selected(self) -> None:
         names = self.current_names()
@@ -1692,6 +1861,8 @@ class TBTControlWindow(tk.Toplevel):
             return
         if len(names) > self.max_bpms():
             messagebox.showwarning("Too many BPMs", f"Limit is {self.max_bpms()} BPMs in this panel.", parent=self)
+            return
+        if not self.require_write_armed():
             return
         status = self.status_lines(names)
         self.write_status("Pre-start status:\n" + "\n".join(status))
@@ -1708,6 +1879,8 @@ class TBTControlWindow(tk.Toplevel):
         names = self.current_names()
         if not names:
             messagebox.showinfo("Select BPM", "Load or select one or more BPMs first.", parent=self)
+            return
+        if not self.require_write_armed():
             return
         ok = self.app.confirm_and_write(self.app.tbt_commands(names, enabled=False), action=f"stop TBT raw logging for {len(names)} BPM(s)")
         self.append_status("\nStop command completed." if ok else "\nStop did not execute or did not fully succeed.")

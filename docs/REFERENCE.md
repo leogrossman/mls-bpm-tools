@@ -59,8 +59,9 @@ Important files:
 - `session.log`
 - `events.jsonl`
 - `raw_snapshots/*.npz`
+- `raw_bpm_logs/*.npz`
 
-Raw snapshots are bounded and intended for regression/debugging, not long-term archiving.
+Raw snapshots are bounded and intended for regression/debugging, not long-term archiving. Files in `raw_bpm_logs` are explicit operator-requested read-only captures from the TBT raw logging control window. They include complex button arrays, separate I/Q arrays, sum phasors, and `metadata_json`.
 
 ## Plot Window Controls
 

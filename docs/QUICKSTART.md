@@ -81,9 +81,11 @@ In normal mode, TBT write buttons are blocked. Use `TBT raw logging control...` 
 2. Keep `max BPMs` small, usually 2-4 BPMs while other experiments are running.
 3. Click `Check selected status` before changing anything.
 4. Click `Preview start writes` and review every PV/value.
-5. Only in write-capable mode, click `Start selected with auto-stop`.
-6. Confirm the EPICS writes in the warning dialog.
-7. Verify that the auto-stop setting is short enough for the study.
+5. Use `Capture raw arrays now` or `Start capture series` to save read-only raw BPM data. This works in normal read-only mode.
+6. Only in write-capable mode, turn on `Arm write mode`; the indicator turns red.
+7. Click `Start selected with auto-stop`.
+8. Confirm the EPICS writes in the warning dialog.
+9. Verify that the auto-stop setting is short enough for the study.
 
 The panel writes only the selected BPMs, unlike the original shell scripts which used `caput_many` broadly. The start command writes:
 
@@ -101,6 +103,14 @@ python3 bpm_iq_viewer.py --live --allow-writes
 Start writes `"1 second"` and stop writes `"Passive"` to both raw and synth `.SCAN` PVs.
 
 The `Suggest burst BPMs` button currently uses the built-in SSMB optics guide to choose a tiny mix of high-`|Dx|` BPMs and low-`|Dx|` reference BPMs. Treat it as a practical starting set for burst/longitudinal-phase studies, not a machine-approved optics table.
+
+Read-only raw captures are saved here:
+
+```text
+.mls_bpm_local/logs/session_YYYYMMDD_HHMMSS/raw_bpm_logs/*.npz
+```
+
+Each file contains complex arrays, separate I/Q arrays, a sum phasor per BPM, and `metadata_json`.
 
 ## If It Looks Blank
 
