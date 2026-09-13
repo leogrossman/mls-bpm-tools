@@ -80,6 +80,8 @@ The main window action panel is tabbed:
 - `Raw TBT`: guarded raw turn-by-turn on/off/status/capture actions.
 - `App`: save config, help, and quit.
 
+The `Current state` strip above the BPM list is the quick operator dashboard. It shows selected BPM count, a compact raw-TBT `.SCAN` summary, and compact tune/status readback results. Use `Refresh raw TBT` and `Refresh tunes/status` when you want fresh readbacks.
+
 ## TBT Raw Logging
 
 In normal mode, TBT write buttons are blocked. Use `Raw TBT on/off + capture...` or `TBT raw logging control...` for the safer workflow:
@@ -118,7 +120,7 @@ The TBT window shows an uncompressed planning estimate for one capture, the requ
 
 ## CSR / THz Bursting Analysis
 
-Use `Bursting analysis...` after saving one or more raw captures. The analysis window is read-only and can load the latest `.npz` capture automatically.
+Use `Bursting analysis...` after saving one or more raw captures, or click `Analyze live selection now...` for a read-only analysis of the currently selected BPMs. The saved `.npz` path is better for reproducibility; the live path is a quick-look workflow.
 
 For immediate live feedback in a plot window, choose plot type `bursting`. It shows the selected signal phase trace, phase PSD, spectrogram, and 1-200 kHz band power for the BPMs/signals already enabled in that window.
 

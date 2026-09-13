@@ -1505,7 +1505,7 @@ class LatticeWindow(tk.Toplevel):
 
 
 class PVProbeWindow(tk.Toplevel):
-    def __init__(self, app: "BPMViewer"):
+    def __init__(self, app: "BPMViewer", autoload_latest: bool = True):
         super().__init__(app.root)
         self.app = app
         self.title("Read-only PV probe / config helper")
@@ -2041,6 +2041,7 @@ class BurstAnalysisWindow(tk.Toplevel):
 
         top = ttk.Frame(self, padding=6)
         top.pack(fill=tk.X)
+        ttk.Button(top, text="Read live selection now", command=self.load_live_selection).pack(side=tk.LEFT, padx=3)
         ttk.Button(top, text="Load latest capture", command=self.load_latest_capture).pack(side=tk.LEFT, padx=3)
         ttk.Button(top, text="Load .npz capture...", command=self.load_capture_dialog).pack(side=tk.LEFT, padx=3)
         ttk.Label(top, text="Observable:").pack(side=tk.LEFT, padx=(12, 3))
@@ -2096,7 +2097,10 @@ class BurstAnalysisWindow(tk.Toplevel):
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         NavigationToolbar2Tk(self.canvas, plot_frame).update()
 
-        self.load_latest_capture(silent=True)
+        if autoload_latest:
+            self.load_latest_capture(silent=True)
+        else:
+            self.write_notes("Use Read live selection now, or load a saved raw BPM capture.")
 
     def observable_key(self) -> str:
         label = self.observable_label.get()
@@ -2174,6 +2178,60 @@ class BurstAnalysisWindow(tk.Toplevel):
         self.bpm_a.set(bpms[0])
         self.bpm_b.set(bpms[1] if len(bpms) > 1 else bpms[0])
         self.write_notes(f"Loaded {path}\nBPMs: {', '.join(bpms)}\nSample rate: {metadata.get('sample_rate_hz', self.app.cfg.sample_rate_hz)} Hz")
+        self.analyze()
+
+    def load_live_selection(self) -> None:
+        names = self.app.selected_names() or [bpm.name for bpm in self.app.known_bpms()[:4]]
+        if not names:
+            self.write_notes("No BPMs selected and no configured fallback BPMs found.")
+            return
+        self.app.sync_runtime_config()
+        arrays: Dict[str, np.ndarray] = {}
+        errors: List[str] = []
+        for bpm in names:
+            try:
+                phasors = read_button_phasors(self.app.backend, self.app.cfg, bpm, BUTTONS)
+                for button, value in phasors.items():
+                    arr = np.asarray(value, dtype=complex).ravel()
+                    arrays[f"{bpm}_{button}_complex"] = arr
+                    arrays[f"{bpm}_{button}_I"] = arr.real
+                    arrays[f"{bpm}_{button}_Q"] = arr.imag
+                arrays[f"{bpm}_sum_complex"] = sum(np.asarray(phasors[button], dtype=complex).ravel() for button in BUTTONS)
+            except Exception as exc:
+                errors.append(f"{bpm}: {exc}")
+                self.app.session.event("burst_live_read_error", bpm=bpm, error=str(exc))
+        bpms = capture_bpm_names(arrays)
+        if not bpms:
+            self.write_notes("Live BPM read failed:\n" + "\n".join(errors))
+            return
+        try:
+            self.app.refresh_tunes()
+            tune_values = self.app._tune_values
+        except Exception as exc:
+            tune_values = {}
+            errors.append(f"tunes: {exc}")
+        self.capture_path = None
+        self.capture_metadata = {
+            "timestamp": _dt.datetime.now().isoformat(timespec="milliseconds"),
+            "source": "live_read",
+            "sample_rate_hz": self.app.cfg.sample_rate_hz,
+            "bpms": bpms,
+            "errors": errors,
+            "tune_values": tune_values,
+        }
+        self.capture_arrays = arrays
+        self.capture_bpms = bpms
+        self.bpm_a_combo.configure(values=bpms)
+        self.bpm_b_combo.configure(values=bpms)
+        self.bpm_a.set(bpms[0])
+        self.bpm_b.set(bpms[1] if len(bpms) > 1 else bpms[0])
+        self.write_notes(
+            "Loaded live BPM arrays for analysis.\n"
+            f"BPMs: {', '.join(bpms)}\n"
+            "This is read-only and not automatically archived; use Raw TBT capture for reproducible files."
+            + ("\n\nErrors:\n" + "\n".join(errors) if errors else "")
+        )
+        self.app.session.event("burst_live_read_loaded", bpms=bpms, errors=errors)
         self.analyze()
 
     def write_notes(self, text: str) -> None:
@@ -2395,6 +2453,9 @@ class BPMViewer:
         self.strip_marker_positions: Dict[str, Tuple[float, float]] = {}
         self.plot_windows: List[PlotWindow] = []
         self.tbt_auto_stop_after_id: Optional[str] = None
+        self.selection_summary = tk.StringVar(value="Selected BPMs: 0")
+        self.raw_tbt_summary = tk.StringVar(value="Raw TBT: not checked")
+        self.tune_summary = tk.StringVar(value="Tunes/status: not checked")
 
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
@@ -2442,22 +2503,33 @@ class BPMViewer:
         self.bpm_strip.bind("<Configure>", lambda _e: self.draw_bpm_strip())
         self.bpm_strip.bind("<Button-1>", self.on_bpm_strip_click)
 
-        ttk.Label(main, text="BPM list", font=("TkDefaultFont", 12, "bold")).grid(row=2, column=0, sticky="w")
+        dashboard = ttk.LabelFrame(main, text="Current state", padding=6)
+        dashboard.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        dashboard.columnconfigure(0, weight=1)
+        dashboard.columnconfigure(1, weight=1)
+        dashboard.columnconfigure(2, weight=1)
+        ttk.Label(dashboard, textvariable=self.selection_summary).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        ttk.Label(dashboard, textvariable=self.raw_tbt_summary).grid(row=0, column=1, sticky="w", padx=(0, 10))
+        ttk.Label(dashboard, textvariable=self.tune_summary).grid(row=0, column=2, sticky="w", padx=(0, 10))
+        ttk.Button(dashboard, text="Refresh raw TBT", command=self.refresh_main_tbt_indicator).grid(row=0, column=3, sticky="e", padx=(6, 0))
+        ttk.Button(dashboard, text="Refresh tunes/status", command=self.refresh_status_pvs).grid(row=0, column=4, sticky="e", padx=(4, 0))
+
+        ttk.Label(main, text="BPM list", font=("TkDefaultFont", 12, "bold")).grid(row=3, column=0, sticky="w")
         self.search = tk.StringVar()
-        ttk.Label(main, text="Filter BPM name or section:").grid(row=3, column=0, sticky="w")
+        ttk.Label(main, text="Filter BPM name or section:").grid(row=4, column=0, sticky="w")
         search_entry = ttk.Entry(main, textvariable=self.search, width=28)
-        search_entry.grid(row=4, column=0, sticky="ew", pady=(2, 4))
+        search_entry.grid(row=5, column=0, sticky="ew", pady=(2, 4))
         search_entry.bind("<KeyRelease>", lambda _e: self.populate_bpms())
 
         self.listbox = tk.Listbox(main, selectmode=tk.EXTENDED, exportselection=False)
-        self.listbox.grid(row=5, column=0, rowspan=8, sticky="nsew")
+        self.listbox.grid(row=6, column=0, rowspan=8, sticky="nsew")
         self.listbox.bind("<Double-Button-1>", lambda _e: self.open_selected())
         self.listbox.bind("<Return>", lambda _e: self.open_selected())
-        self.listbox.bind("<<ListboxSelect>>", lambda _e: self.draw_bpm_strip())
+        self.listbox.bind("<<ListboxSelect>>", lambda _e: (self.draw_bpm_strip(), self.update_main_indicators()))
         self.populate_bpms()
 
         actions = ttk.LabelFrame(main, text="Actions", padding=4)
-        actions.grid(row=5, column=1, rowspan=8, sticky="nsew", padx=(10, 0))
+        actions.grid(row=6, column=1, rowspan=8, sticky="nsew", padx=(10, 0))
         action_tabs = ttk.Notebook(actions)
         action_tabs.pack(fill=tk.BOTH, expand=True)
 
@@ -2478,12 +2550,12 @@ class BPMViewer:
         analysis_tab = ttk.Frame(action_tabs, padding=6)
         action_tabs.add(analysis_tab, text="Analysis")
         ttk.Button(analysis_tab, text="Bursting analysis...", command=lambda: BurstAnalysisWindow(self)).pack(fill=tk.X, pady=2)
+        ttk.Button(analysis_tab, text="Analyze live selection now...", command=self.open_live_burst_analysis).pack(fill=tk.X, pady=2)
         ttk.Button(analysis_tab, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(analysis_tab, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
-        ttk.Button(analysis_tab, text="Refresh tune/status PVs", command=self.refresh_status_pvs).pack(fill=tk.X, pady=2)
         ttk.Label(
             analysis_tab,
-            text="Offline bursting analysis uses saved raw captures. Live plot windows also have a 'bursting' plot mode.",
+            text="Use saved captures for reproducible analysis, or read the selected BPMs live for a quick look.",
             wraplength=210,
             justify=tk.LEFT,
         ).pack(fill=tk.X, pady=(8, 0))
@@ -2491,13 +2563,11 @@ class BPMViewer:
         tbt_tab = ttk.Frame(action_tabs, padding=6)
         action_tabs.add(tbt_tab, text="Raw TBT")
         ttk.Button(tbt_tab, text="Raw TBT on/off + capture...", command=lambda: TBTControlWindow(self)).pack(fill=tk.X, pady=2)
-        ttk.Button(tbt_tab, text="Open TBT start panel…", command=self.start_tbt_selected).pack(fill=tk.X, pady=2)
         ttk.Button(tbt_tab, text="Stop selected now…", command=self.stop_tbt_selected).pack(fill=tk.X, pady=2)
-        ttk.Button(tbt_tab, text="Check selected/all status", command=self.check_tbt_status).pack(fill=tk.X, pady=2)
-        ttk.Button(tbt_tab, text="Preview selected start writes", command=self.preview_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(tbt_tab, text="Show full TBT status", command=self.check_tbt_status).pack(fill=tk.X, pady=2)
         ttk.Label(
             tbt_tab,
-            text="Write actions stay blocked until the main write button is red and the TBT panel is armed.",
+            text="One guarded panel handles start, stop, status, preview, and read-only capture. Start requires write unlock, arm switch, and confirmation.",
             wraplength=210,
             justify=tk.LEFT,
         ).pack(fill=tk.X, pady=(8, 0))
@@ -2509,7 +2579,7 @@ class BPMViewer:
         ttk.Button(app_tab, text="Quit", command=root.destroy).pack(fill=tk.X, pady=2)
 
         details = ttk.Notebook(main)
-        details.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        details.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
         pv_tab = ttk.Frame(details, padding=8)
         details.add(pv_tab, text="PV templates")
@@ -2547,14 +2617,15 @@ class BPMViewer:
         ).pack(anchor="w")
 
         self.status = tk.StringVar(value=mode_label)
-        ttk.Label(main, textvariable=self.status).grid(row=14, column=0, columnspan=2, sticky="w", pady=8)
+        ttk.Label(main, textvariable=self.status).grid(row=15, column=0, columnspan=2, sticky="w", pady=8)
         self.performance_status = tk.StringVar(value="Performance: no plot refresh yet")
-        ttk.Label(main, textvariable=self.performance_status).grid(row=15, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Label(main, textvariable=self.performance_status).grid(row=16, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
-        main.rowconfigure(5, weight=1)
+        main.rowconfigure(6, weight=1)
         main.columnconfigure(0, weight=1)
         main.columnconfigure(1, minsize=260)
         self.status.set(f"{mode_label}. No plot is opened automatically; click a BPM marker or double-click a list row.")
+        self.update_main_indicators()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def register_plot_window(self, window: PlotWindow) -> None:
@@ -2564,6 +2635,44 @@ class BPMViewer:
 
     def unregister_plot_window(self, window: PlotWindow) -> None:
         self.plot_windows = [item for item in self.plot_windows if item is not window and item.winfo_exists()]
+
+    def update_main_indicators(self) -> None:
+        selected = self.selected_names()
+        selected_text = ", ".join(selected[:3]) + ("..." if len(selected) > 3 else "")
+        self.selection_summary.set(f"Selected BPMs: {len(selected)}" + (f" ({selected_text})" if selected else ""))
+        if self._tune_values:
+            labels = ", ".join(f"{label}=OK" for label in sorted(self._tune_values))
+            self.tune_summary.set(f"Tunes/status: {labels}")
+
+    def refresh_main_tbt_indicator(self) -> None:
+        names = self.selected_names() or [bpm.name for bpm in self.known_bpms()[:4]]
+        self.sync_runtime_config()
+        on_count = 0
+        off_count = 0
+        err_count = 0
+        checked = 0
+        for bpm in names:
+            for key in ("scan", "synth_scan"):
+                pv = pv_for(self.cfg, bpm, key)
+                try:
+                    value = self.backend.get_value(pv)
+                    checked += 1
+                    if str(value) == str(self.cfg.raw_scan_on_value):
+                        on_count += 1
+                    else:
+                        off_count += 1
+                except Exception as exc:
+                    err_count += 1
+                    self.session.event("tbt_status_error", bpm=bpm, pv=pv, error=str(exc), source="main_indicator")
+        if checked == 0 and err_count:
+            self.raw_tbt_summary.set(f"Raw TBT: ERR for {err_count} PV(s)")
+        else:
+            self.raw_tbt_summary.set(f"Raw TBT: {on_count} ON, {off_count} off, {err_count} err ({len(names)} BPMs)")
+        self.status.set("Refreshed raw TBT indicator. Use Raw TBT tab for full PV list.")
+
+    def open_live_burst_analysis(self) -> None:
+        win = BurstAnalysisWindow(self, autoload_latest=False)
+        self.root.after(50, win.load_live_selection)
 
     def update_global_write_button(self) -> None:
         if not hasattr(self, "write_mode_button"):
@@ -2638,6 +2747,8 @@ class BPMViewer:
                 self.listbox.insert(tk.END, display)
                 self.displayed_bpm_names.append(bpm.name)
         self.draw_bpm_strip()
+        if hasattr(self, "selection_summary"):
+            self.update_main_indicators()
 
     def draw_bpm_strip(self) -> None:
         if not hasattr(self, "bpm_strip"):
@@ -2715,6 +2826,7 @@ class BPMViewer:
                 self.listbox.selection_set(i)
                 self.listbox.see(i)
                 self.draw_bpm_strip()
+                self.update_main_indicators()
                 break
 
     def select_named_bpms(self, names: Sequence[str]) -> None:
@@ -2724,6 +2836,7 @@ class BPMViewer:
             if name in targets:
                 self.listbox.selection_set(i)
         self.draw_bpm_strip()
+        self.update_main_indicators()
 
     def selected_names(self) -> List[str]:
         return [self.displayed_bpm_names[i] for i in self.listbox.curselection()]
@@ -2733,6 +2846,7 @@ class BPMViewer:
         if self.displayed_bpm_names:
             self.listbox.selection_set(0, len(self.displayed_bpm_names) - 1)
         self.draw_bpm_strip()
+        self.update_main_indicators()
         self.status.set(f"Selected {len(self.displayed_bpm_names)} visible BPM(s).")
 
     def select_all_bpms(self) -> None:
@@ -2743,6 +2857,7 @@ class BPMViewer:
     def clear_bpm_selection(self) -> None:
         self.listbox.selection_clear(0, tk.END)
         self.draw_bpm_strip()
+        self.update_main_indicators()
         self.status.set("Cleared BPM selection.")
 
     def known_bpms(self) -> List[BPMInfo]:
@@ -2756,6 +2871,7 @@ class BPMViewer:
             if name in targets:
                 self.listbox.selection_set(index)
         self.draw_bpm_strip()
+        self.update_main_indicators()
         self.status.set(f"Selected {len(targets)} known BPM candidate(s). Starred BPMs have orbit PVs seen in betagui/CS-Studio material.")
 
     def open_startup_plot(self, expression: str = "A+B+C+D; A") -> None:
@@ -2815,14 +2931,28 @@ class BPMViewer:
 
     def show_help(self) -> None:
         text = (
-            "Quick control-room flow\n\n"
+            "What this tool is\n\n"
+            "It reads MLS BPM raw complex turn-by-turn button data A/B/C/D. Normal startup is live read-only. Nothing is written until you explicitly unlock write mode and confirm exact EPICS writes.\n\n"
+            "Main window\n\n"
             "1. Start normally: python3 bpm_iq_viewer.py\n"
-            "2. Select one or more BPMs. Starred BPMs are known from local betagui / CS-Studio material.\n"
-            "3. Click Open selected plot. Sum A+B+C+D opens first; add A/B/C/D or other expressions as needed.\n"
-            "4. Use plot type 'bursting' for live phase PSD, spectrogram, and 1-200 kHz band power.\n"
-            "5. If a PV is wrong, edit it in the table or PV probe, then Save config.\n"
-            "6. Raw TBT data capture works with writes locked.\n"
-            "7. To start/stop raw TBT logging, unlock the large main write button, use the limited TBT window, arm writes there, and confirm exact commands.\n\n"
+            "2. Use the top lattice strip or BPM list to select BPMs. Starred BPMs are known from local betagui / CS-Studio material.\n"
+            "3. The Current state strip shows selected BPM count, raw TBT status summary, and tune/status summary. Use the refresh buttons when you want fresh readbacks.\n"
+            "4. Use the Actions tabs:\n"
+            "   Plot: open live plots and manage BPM selection.\n"
+            "   Analysis: live/saved bursting analysis, lattice viewer, PV probe.\n"
+            "   Raw TBT: guarded raw logging on/off/status/capture.\n"
+            "   App: save config, help, quit.\n\n"
+            "Plotting and analysis\n\n"
+            "- Open selected plot for live raw traces, phase, magnitude, spectra, and plot type 'bursting'.\n"
+            "- Bursting analysis can read the selected BPMs live, or load saved raw .npz captures for reproducible offline analysis.\n"
+            "- BPM analysis is centroid/moment evidence only; it does not reconstruct microbunch density f(z,delta).\n\n"
+            "Raw TBT logging safety\n\n"
+            "- Read-only raw data capture works while the main write button is green/locked.\n"
+            "- To start or stop raw BPM TBT logging, unlock the large main write button, open Raw TBT, arm writes inside that window, then confirm exact PV/value commands.\n"
+            "- Stop writes both raw and synth .SCAN PVs back to Passive for the selected limited set.\n\n"
+            "PV IDs and failed candidates\n\n"
+            "- Tune PVs TUNEZRP:measX/Y/Z were seen working in earlier logs. If they fail now, edit them in the Tunes tab or PV probe and Save config.\n"
+            "- BBQRP:*:DRIVEO rows are optional status candidates. If they do not connect, leave them disabled; they are not required for BPM plots or raw capture.\n\n"
             "Useful raw PV pattern\n"
             "{bpm}:signals:ddc_raw.SCAN = enable/scan control\n"
             "{bpm}:signals:ddc_raw.Ia/Qa ... Id/Qd = raw complex button turns\n\n"
@@ -2957,10 +3087,15 @@ class BPMViewer:
 
     def refresh_status_pvs(self) -> None:
         self.refresh_tunes()
+        status_ok = 0
+        status_on = 0
+        status_err = 0
+        status_skip = 0
         for item, value_var, lamp, enabled_var, _pv_var in self.status_pv_rows:
             if not enabled_var.get():
                 value_var.set("disabled")
                 lamp.configure(text="SKIP", bg="#c9c9c9")
+                status_skip += 1
                 continue
             try:
                 value = self.backend.get_value(item.pv)
@@ -2968,6 +3103,8 @@ class BPMViewer:
                 is_on = text in item.on_values
                 lamp.configure(text="ON" if is_on else "OFF", bg="#44aa66" if is_on else "#c9c9c9")
                 value_var.set(text)
+                status_ok += 1
+                status_on += int(is_on)
                 if self._last_status_values.get(item.pv) != text:
                     self.session.event("status_pv_read", label=item.label, pv=item.pv, value=text, is_on=is_on)
                     self._last_status_values[item.pv] = text
@@ -2975,10 +3112,16 @@ class BPMViewer:
                 lamp.configure(text="ERR", bg="#d65f5f")
                 message = str(exc)
                 value_var.set(message)
+                status_err += 1
                 error_marker = f"ERROR:{message}"
                 if self._last_status_values.get(item.pv) != error_marker:
                     self.session.event("status_pv_error", label=item.label, pv=item.pv, error=message)
                     self._last_status_values[item.pv] = error_marker
+        tune_ok = len(self._tune_values)
+        tune_enabled = sum(1 for _item, _value_var, _lamp, enabled_var, _pv_var in self.tune_rows if enabled_var.get())
+        self.tune_summary.set(
+            f"Tunes/status: tunes {tune_ok}/{tune_enabled} OK, status {status_on} ON, {status_ok - status_on} off, {status_err} err, {status_skip} skip"
+        )
         self.status.set("Status/tune PV refresh finished. Disabled rows were skipped.")
 
     def close(self) -> None:

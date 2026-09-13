@@ -65,7 +65,7 @@ Raw snapshots are bounded and intended for regression/debugging, not long-term a
 
 ## CSR / THz Bursting Analysis
 
-The GUI `Bursting analysis...` window reads saved `raw_bpm_logs/*.npz` captures and performs no machine writes. It can compute:
+The GUI `Bursting analysis...` window reads saved `raw_bpm_logs/*.npz` captures or the current live BPM selection and performs no machine writes. It can compute:
 
 - turn-by-turn common-mode phase and magnitude
 - uncalibrated horizontal/vertical difference-over-sum proxies
@@ -75,7 +75,7 @@ The GUI `Bursting analysis...` window reads saved `raw_bpm_logs/*.npz` captures 
 - cross spectrum, phase, and magnitude-squared coherence between two BPM observables
 - a guide-only correlation of horizontal-like band power with built-in `|Dx|`
 
-The analysis uses `f_sample = f_rev` from capture metadata/config for frequency and tune axes. It does not assume a DDC carrier frequency or convert phase into arrival time.
+The analysis uses `f_sample = f_rev` from capture metadata/config for frequency and tune axes. It does not assume a DDC carrier frequency or convert phase into arrival time. Live analysis is a quick-look read; use raw captures for reproducible files.
 
 Live plot windows also provide a `bursting` plot mode for immediate feedback on selected live BPMs/signals. It shows phase trace, phase PSD, a phase spectrogram for the first enabled trace, and 1-200 kHz band power.
 

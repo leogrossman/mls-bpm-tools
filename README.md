@@ -60,9 +60,10 @@ That command is live read-only safe mode, not demo mode.
 
 - `python3 bpm_iq_viewer.py` uses live EPICS reads and blocks all writes.
 - The main window has a large green/red write-mode button. Green means writes are locked; red means write-capable mode is unlocked for this GUI session.
+- The main window has an always-visible `Current state` strip for selected BPM count, raw TBT on/off/error summary, and tune/status summary.
 - TBT start/stop still requires the limited raw-TBT window, the red `Arm write mode` toggle inside that window, and a final exact-command confirmation dialog.
 - The `Raw TBT on/off + capture...` / `TBT raw logging control...` window is visible in read-only mode, limits raw logging to a reviewed small BPM set, supports an SSMB high/low dispersion suggestion, checks `.SCAN` status, captures raw arrays to atomic `.npz` files, estimates capture storage, previews writes, and can auto-stop back to `Passive`.
-- The `Bursting analysis...` window works offline on saved `.npz` captures and provides Welch spectra, spectrograms, band power, cross-BPM coherence, and high-/low-dispersion comparison aids without adding machine writes.
+- The `Bursting analysis...` window can analyze either saved `.npz` captures or the current live BPM selection. Live reads are still read-only; saved captures remain best for reproducibility.
 - Optional tune/noise/status PVs are not read on startup.
 - Plot windows default to the `all` view with `A+B+C+D` first, then `A`; this shows raw magnitude, phase, phase spectrum, and magnitude spectrum.
 - Plot windows also include a live `bursting` view with phase trace, phase PSD, spectrogram, and 1-200 kHz band power for the currently selected BPM/signals.
