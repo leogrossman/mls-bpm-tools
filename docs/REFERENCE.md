@@ -63,6 +63,20 @@ Important files:
 
 Raw snapshots are bounded and intended for regression/debugging, not long-term archiving. Files in `raw_bpm_logs` are explicit operator-requested read-only captures from the TBT raw logging control window. They include complex button arrays, separate I/Q arrays, sum phasors, and `metadata_json`.
 
+## CSR / THz Bursting Analysis
+
+The GUI `Bursting analysis...` window reads saved `raw_bpm_logs/*.npz` captures and performs no machine writes. It can compute:
+
+- turn-by-turn common-mode phase and magnitude
+- uncalibrated horizontal/vertical difference-over-sum proxies
+- Welch PSD
+- short-time spectrogram
+- band-limited power versus time
+- cross spectrum, phase, and magnitude-squared coherence between two BPM observables
+- a guide-only correlation of horizontal-like band power with built-in `|Dx|`
+
+The analysis uses `f_sample = f_rev` from capture metadata/config for frequency and tune axes. It does not assume a DDC carrier frequency or convert phase into arrival time.
+
 ## Plot Window Controls
 
 - `all`: default view; shows raw magnitude, unwrapped phase, phase spectrum, and magnitude spectrum.

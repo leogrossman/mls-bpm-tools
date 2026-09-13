@@ -94,11 +94,17 @@ from bpm_core import (
     SpectrumSettings,
     StatusPV,
     TunePV,
+    BurstAnalysisSettings,
+    band_limited_power,
     combine_selected_expressions,
     combination_expression,
     basic_lattice_functions,
     canonical_optics_mode,
+    capture_bpm_names,
+    capture_observables,
+    cross_spectrum_coherence,
     decimation_stride,
+    dispersion_response_score,
     estimate_iq_payload,
     find_spectrum_peaks,
     human_bytes,
@@ -110,8 +116,11 @@ from bpm_core import (
     phase_pipeline,
     pv_for,
     read_button_phasors,
+    load_raw_bpm_capture,
+    spectrogram_power,
     spectrum_pipeline,
     suggested_burst_bpms,
+    welch_psd,
     tbt_scan_commands,
     tune_markers_from_values,
     tune_value_to_frequency,
@@ -1781,6 +1790,11 @@ class TBTControlWindow(tk.Toplevel):
             "mode_label": self.app.mode_label,
             "write_mode": self.write_mode_text(),
         }
+        try:
+            self.app.refresh_tunes()
+            metadata["tune_values"] = self.app._tune_values
+        except Exception as exc:
+            metadata["tune_read_error"] = str(exc)
         errors: List[str] = []
         for bpm in names:
             try:
@@ -1800,7 +1814,7 @@ class TBTControlWindow(tk.Toplevel):
             return None
         metadata["errors"] = errors
         path = self.raw_capture_dir() / f"raw_bpm_{stamp}_{len(names)}bpms.npz"
-        arrays["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
+        arrays["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True, default=str))
         np.savez_compressed(path, **arrays)
         lines = [
             f"Saved raw BPM capture: {path}",
@@ -1884,6 +1898,349 @@ class TBTControlWindow(tk.Toplevel):
             return
         ok = self.app.confirm_and_write(self.app.tbt_commands(names, enabled=False), action=f"stop TBT raw logging for {len(names)} BPM(s)")
         self.append_status("\nStop command completed." if ok else "\nStop did not execute or did not fully succeed.")
+
+
+class BurstAnalysisWindow(tk.Toplevel):
+    OBSERVABLES = (
+        ("Sum phase [rad, uncalibrated arrival centroid]", "sum_phase_rad"),
+        ("Sum magnitude [arb. common mode]", "sum_mag"),
+        ("Horizontal diff/sum [uncalibrated]", "x_diff_over_sum_uncal"),
+        ("Vertical diff/sum [uncalibrated]", "y_diff_over_sum_uncal"),
+    )
+
+    def __init__(self, app: "BPMViewer"):
+        super().__init__(app.root)
+        self.app = app
+        self.title("CSR/THz bursting BPM analysis")
+        self.geometry("1280x820")
+        self.capture_path: Optional[Path] = None
+        self.capture_metadata: Dict[str, object] = {}
+        self.capture_arrays: Dict[str, np.ndarray] = {}
+        self.capture_bpms: List[str] = []
+
+        top = ttk.Frame(self, padding=6)
+        top.pack(fill=tk.X)
+        ttk.Button(top, text="Load latest capture", command=self.load_latest_capture).pack(side=tk.LEFT, padx=3)
+        ttk.Button(top, text="Load .npz capture...", command=self.load_capture_dialog).pack(side=tk.LEFT, padx=3)
+        ttk.Label(top, text="Observable:").pack(side=tk.LEFT, padx=(12, 3))
+        self.observable_label = tk.StringVar(value=self.OBSERVABLES[0][0])
+        ttk.Combobox(
+            top,
+            textvariable=self.observable_label,
+            values=[label for label, _key in self.OBSERVABLES],
+            state="readonly",
+            width=38,
+        ).pack(side=tk.LEFT)
+        ttk.Label(top, text="BPM A:").pack(side=tk.LEFT, padx=(12, 3))
+        self.bpm_a = tk.StringVar()
+        self.bpm_a_combo = ttk.Combobox(top, textvariable=self.bpm_a, values=[], width=14)
+        self.bpm_a_combo.pack(side=tk.LEFT)
+        ttk.Label(top, text="BPM B:").pack(side=tk.LEFT, padx=(8, 3))
+        self.bpm_b = tk.StringVar()
+        self.bpm_b_combo = ttk.Combobox(top, textvariable=self.bpm_b, values=[], width=14)
+        self.bpm_b_combo.pack(side=tk.LEFT)
+        ttk.Button(top, text="Analyze", command=self.analyze).pack(side=tk.LEFT, padx=8)
+
+        settings = ttk.Frame(self, padding=(6, 0, 6, 6))
+        settings.pack(fill=tk.X)
+        ttk.Label(settings, text="nperseg").pack(side=tk.LEFT)
+        self.nperseg_text = tk.StringVar(value="4096")
+        ttk.Entry(settings, textvariable=self.nperseg_text, width=8).pack(side=tk.LEFT, padx=(3, 10))
+        ttk.Label(settings, text="overlap").pack(side=tk.LEFT)
+        self.overlap_text = tk.StringVar(value="0.75")
+        ttk.Entry(settings, textvariable=self.overlap_text, width=6).pack(side=tk.LEFT, padx=(3, 10))
+        ttk.Label(settings, text="band Hz").pack(side=tk.LEFT)
+        self.band_low_text = tk.StringVar(value="1000")
+        ttk.Entry(settings, textvariable=self.band_low_text, width=9).pack(side=tk.LEFT, padx=(3, 2))
+        self.band_high_text = tk.StringVar(value="200000")
+        ttk.Entry(settings, textvariable=self.band_high_text, width=9).pack(side=tk.LEFT, padx=(2, 10))
+        ttk.Label(
+            settings,
+            text="BPM analysis is centroid/moment evidence only; it cannot reconstruct microbunch density f(z,delta).",
+        ).pack(side=tk.LEFT, padx=8)
+
+        body = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        left = ttk.Frame(body, padding=6)
+        body.add(left, weight=0)
+        ttk.Label(left, text="Analysis notes", font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+        self.notes = tk.Text(left, width=44, height=36, wrap="word")
+        self.notes.pack(fill=tk.BOTH, expand=True)
+
+        plot_frame = ttk.Frame(body)
+        body.add(plot_frame, weight=1)
+        self.fig = Figure(figsize=(9, 7), dpi=100)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        NavigationToolbar2Tk(self.canvas, plot_frame).update()
+
+        self.load_latest_capture(silent=True)
+
+    def observable_key(self) -> str:
+        label = self.observable_label.get()
+        for candidate_label, key in self.OBSERVABLES:
+            if candidate_label == label:
+                return key
+        return "sum_phase_rad"
+
+    def analysis_settings(self) -> BurstAnalysisSettings:
+        try:
+            nperseg = int(self.nperseg_text.get())
+        except ValueError:
+            nperseg = 4096
+        try:
+            overlap = float(self.overlap_text.get())
+        except ValueError:
+            overlap = 0.75
+        try:
+            low = float(self.band_low_text.get())
+        except ValueError:
+            low = 1000.0
+        try:
+            high = float(self.band_high_text.get())
+        except ValueError:
+            high = 200000.0
+        if high < low:
+            low, high = high, low
+        fs = float(self.capture_metadata.get("sample_rate_hz", self.app.cfg.sample_rate_hz) or self.app.cfg.sample_rate_hz)
+        return BurstAnalysisSettings(sample_rate_hz=fs, nperseg=max(64, nperseg), overlap=overlap, band_low_hz=low, band_high_hz=high)
+
+    def latest_capture_path(self) -> Optional[Path]:
+        roots = [self.app.session.session_dir / "raw_bpm_logs"]
+        roots.extend(sorted((Path(".mls_bpm_local") / "logs").glob("session_*/raw_bpm_logs")))
+        candidates: List[Path] = []
+        for root in roots:
+            if root.exists():
+                candidates.extend(root.glob("*.npz"))
+        if not candidates:
+            return None
+        return max(candidates, key=lambda path: path.stat().st_mtime)
+
+    def load_latest_capture(self, silent: bool = False) -> None:
+        path = self.latest_capture_path()
+        if path is None:
+            self.write_notes("No raw BPM capture found yet. Use TBT raw logging control -> Capture raw arrays now.")
+            if not silent:
+                messagebox.showinfo("No capture", "No raw BPM capture found yet.", parent=self)
+            return
+        self.load_capture(path)
+
+    def load_capture_dialog(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Load raw BPM capture",
+            filetypes=[("NumPy capture", "*.npz"), ("All files", "*.*")],
+        )
+        if path:
+            self.load_capture(Path(path))
+
+    def load_capture(self, path: Path) -> None:
+        try:
+            metadata, arrays = load_raw_bpm_capture(path)
+            bpms = capture_bpm_names(arrays)
+            if not bpms:
+                raise RuntimeError("No BPM arrays found in capture")
+        except Exception as exc:
+            self.write_notes(f"Failed to load capture:\n{path}\n\n{exc}")
+            return
+        self.capture_path = path
+        self.capture_metadata = metadata
+        self.capture_arrays = arrays
+        self.capture_bpms = bpms
+        self.bpm_a_combo.configure(values=bpms)
+        self.bpm_b_combo.configure(values=bpms)
+        self.bpm_a.set(bpms[0])
+        self.bpm_b.set(bpms[1] if len(bpms) > 1 else bpms[0])
+        self.write_notes(f"Loaded {path}\nBPMs: {', '.join(bpms)}\nSample rate: {metadata.get('sample_rate_hz', self.app.cfg.sample_rate_hz)} Hz")
+        self.analyze()
+
+    def write_notes(self, text: str) -> None:
+        self.notes.configure(state=tk.NORMAL)
+        self.notes.delete("1.0", tk.END)
+        self.notes.insert("1.0", text)
+        self.notes.configure(state=tk.DISABLED)
+
+    def capture_tune_markers(self, settings: BurstAnalysisSettings) -> List[Tuple[float, str, str]]:
+        tune_values = self.capture_metadata.get("tune_values")
+        if not isinstance(tune_values, Mapping):
+            return []
+        return tune_markers_from_values(
+            tune_values,
+            settings.sample_rate_hz,
+            include_harmonics=True,
+            max_harmonics=4,
+            include_sidebands=True,
+            sideband_order=1,
+        )
+
+    @staticmethod
+    def draw_frequency_markers(ax, markers: Sequence[Tuple[float, str, str]], y_axis: bool = False) -> None:
+        visible = 0
+        for freq_hz, label, color in markers:
+            freq_khz = freq_hz / 1000.0
+            lo, hi = ax.get_ylim() if y_axis else ax.get_xlim()
+            if freq_khz < min(lo, hi) or freq_khz > max(lo, hi):
+                continue
+            if y_axis:
+                ax.axhline(freq_khz, color=color, linestyle="--", linewidth=0.8, alpha=0.55)
+                ax.text(0.01, freq_khz, label, color=color, fontsize=7, transform=ax.get_yaxis_transform(), va="bottom")
+            else:
+                ax.axvline(freq_khz, color=color, linestyle="--", linewidth=0.8, alpha=0.55)
+                ax.text(freq_khz, 0.98, label, color=color, fontsize=7, transform=ax.get_xaxis_transform(), rotation=90, va="top")
+            visible += 1
+            if visible >= 16:
+                break
+
+    def analyze(self) -> None:
+        if not self.capture_arrays:
+            self.write_notes("Load a raw BPM capture first.")
+            return
+        bpm_a = self.bpm_a.get() or self.capture_bpms[0]
+        bpm_b = self.bpm_b.get() or bpm_a
+        key = self.observable_key()
+        settings = self.analysis_settings()
+        try:
+            obs_a = capture_observables(self.capture_arrays, bpm_a)
+            y_a = np.asarray(obs_a[key], dtype=float)
+        except Exception as exc:
+            self.write_notes(f"Cannot build {key} for {bpm_a}: {exc}")
+            return
+        obs_b = None
+        y_b = None
+        if bpm_b:
+            try:
+                obs_b = capture_observables(self.capture_arrays, bpm_b)
+                y_b = np.asarray(obs_b[key], dtype=float)
+            except Exception:
+                obs_b = None
+                y_b = None
+
+        spec = welch_psd(y_a, settings.sample_rate_hz, settings.nperseg, settings.overlap, settings.window, settings.detrend)
+        sg = spectrogram_power(y_a, settings.sample_rate_hz, settings.nperseg, settings.overlap, settings.window, settings.detrend)
+        band_time, band_power = band_limited_power(sg, settings.band_low_hz, settings.band_high_hz)
+        freq = np.asarray(spec["frequency_hz"])
+        power = np.asarray(spec["psd"])
+        mask = (freq >= settings.min_frequency_hz) & (freq <= settings.max_frequency_hz)
+        peaks = find_spectrum_peaks(freq[mask], normalize_power(power[mask]), max_peaks=6, min_frequency_hz=settings.min_frequency_hz, min_relative_height=0.08)
+        coherence = None
+        if y_b is not None and y_b.size:
+            coherence = cross_spectrum_coherence(y_a, y_b, settings.sample_rate_hz, settings.nperseg, settings.overlap, settings.window, settings.detrend)
+        tune_markers = self.capture_tune_markers(settings)
+
+        self.fig.clear()
+        ax_trace = self.fig.add_subplot(221)
+        ax_psd = self.fig.add_subplot(222)
+        ax_sg = self.fig.add_subplot(223)
+        ax_band = self.fig.add_subplot(224)
+        turns = np.arange(y_a.size)
+        stride = decimation_stride(y_a.size, 2500)
+        ax_trace.plot(turns[::stride], y_a[::stride], label=bpm_a, linewidth=0.9)
+        if y_b is not None and bpm_b != bpm_a:
+            n_plot = min(y_a.size, y_b.size)
+            ax_trace.plot(np.arange(n_plot)[::stride], y_b[:n_plot:stride], label=bpm_b, linewidth=0.9, alpha=0.7)
+        ax_trace.set_title(self.observable_label.get())
+        ax_trace.set_xlabel("turn")
+        ax_trace.grid(True, alpha=0.3)
+        ax_trace.legend(loc="best")
+
+        ax_psd.semilogy(freq / 1000.0, np.maximum(power, 1e-30), label=f"{bpm_a} PSD")
+        if coherence is not None:
+            ax_coh = ax_psd.twinx()
+            ax_coh.plot(coherence["frequency_hz"] / 1000.0, coherence["coherence"], color="#d62728", alpha=0.65, label="coherence")
+            ax_coh.set_ylabel("coherence")
+            ax_coh.set_ylim(0.0, 1.05)
+        ax_psd.set_xlim(0.0, settings.max_frequency_hz / 1000.0)
+        ax_psd.set_title("Welch PSD" + (" + coherence" if coherence is not None else ""))
+        ax_psd.set_xlabel("frequency [kHz]")
+        ax_psd.grid(True, alpha=0.3)
+        self.draw_frequency_markers(ax_psd, tune_markers)
+
+        extent = [sg["time_s"][0] if sg["time_s"].size else 0.0, sg["time_s"][-1] if sg["time_s"].size else 0.0, sg["frequency_hz"][0] / 1000.0, sg["frequency_hz"][-1] / 1000.0]
+        sg_power = 10.0 * np.log10(np.maximum(sg["power"], 1e-30))
+        ax_sg.imshow(sg_power, aspect="auto", origin="lower", extent=extent, cmap="magma")
+        ax_sg.set_ylim(0.0, settings.max_frequency_hz / 1000.0)
+        ax_sg.set_title("spectrogram [dB arb.]")
+        ax_sg.set_xlabel("time [s]")
+        ax_sg.set_ylabel("frequency [kHz]")
+        self.draw_frequency_markers(ax_sg, tune_markers, y_axis=True)
+
+        ax_band.plot(band_time, band_power, color="#2ca02c")
+        ax_band.set_title(f"band power {settings.band_low_hz/1000:.3g}-{settings.band_high_hz/1000:.3g} kHz")
+        ax_band.set_xlabel("time [s]")
+        ax_band.grid(True, alpha=0.3)
+
+        self.fig.tight_layout()
+        self.canvas.draw_idle()
+        self.write_notes(self.analysis_report(bpm_a, bpm_b, key, settings, peaks, coherence, tune_markers))
+
+    def analysis_report(
+        self,
+        bpm_a: str,
+        bpm_b: str,
+        key: str,
+        settings: BurstAnalysisSettings,
+        peaks: Sequence[Tuple[float, float]],
+        coherence: Optional[Mapping[str, np.ndarray]],
+        tune_markers: Sequence[Tuple[float, str, str]],
+    ) -> str:
+        lines = [
+            f"Capture: {self.capture_path}",
+            f"Observable: {key}",
+            f"Sample rate: {settings.sample_rate_hz:.6g} Hz; Q=f/f_rev uses this value.",
+            f"Window: {settings.nperseg} samples, overlap={settings.overlap:.2g}, band={settings.band_low_hz:.4g}-{settings.band_high_hz:.4g} Hz",
+            "",
+            "Interpretation guardrails:",
+            "- BPMs measure centroids/moments, not the microscopic f(z,delta).",
+            "- Sum phase is relative unless DDC carrier/reference calibration is known.",
+            "- Difference/sum traces are uncalibrated transverse-like proxies.",
+            "- Built-in optics curves are guides, not machine-approved low-alpha optics.",
+            "",
+            "Dominant PSD peaks in the selected search band:",
+        ]
+        if peaks:
+            for freq_hz, rel_power in peaks:
+                lines.append(f"- {freq_hz/1000.0:9.4f} kHz  Q={freq_hz/settings.sample_rate_hz:.6g}  rel={rel_power:.3g}")
+        else:
+            lines.append("- none above threshold")
+        lines.extend(["", "Tune/harmonic/sideband markers from capture metadata:"])
+        if tune_markers:
+            for freq_hz, label, _color in tune_markers[:16]:
+                lines.append(f"- {label}: {freq_hz/1000.0:.4f} kHz  Q={freq_hz/settings.sample_rate_hz:.6g}")
+        else:
+            lines.append("- no valid tune readbacks saved in this capture")
+        if coherence is not None:
+            freq = np.asarray(coherence["frequency_hz"], dtype=float)
+            coh = np.asarray(coherence["coherence"], dtype=float)
+            mask = (freq >= settings.band_low_hz) & (freq <= settings.band_high_hz)
+            if np.any(mask):
+                idx_local = int(np.argmax(coh[mask]))
+                idx = np.flatnonzero(mask)[idx_local]
+                lines.extend([
+                    "",
+                    f"Max {bpm_a}-{bpm_b} coherence in band:",
+                    f"- {freq[idx]/1000.0:.4f} kHz, coherence={coh[idx]:.3g}, phase={coherence['phase_rad'][idx]:.3g} rad",
+                ])
+        if key == "x_diff_over_sum_uncal":
+            amplitudes = {}
+            for bpm in self.capture_bpms:
+                try:
+                    obs = capture_observables(self.capture_arrays, bpm)
+                    psd = welch_psd(obs[key], settings.sample_rate_hz, settings.nperseg, settings.overlap)
+                    freq = psd["frequency_hz"]
+                    power = psd["psd"]
+                    mask = (freq >= settings.band_low_hz) & (freq <= settings.band_high_hz)
+                    amplitudes[bpm] = float(np.nanmean(power[mask])) if np.any(mask) else math.nan
+                except Exception:
+                    continue
+            score = dispersion_response_score(list(amplitudes), amplitudes, self.app.cfg, mode="ssmb")
+            lines.extend([
+                "",
+                "High/low dispersion check using built-in SSMB guide:",
+                f"- corr(|Dx|, band power) = {score['corr_abs_dx']:.3g} over n={int(score['n'])}",
+                "- Use real optics before making physics claims.",
+            ])
+        return "\n".join(lines)
 
 
 class BPMViewer:
@@ -1971,6 +2328,7 @@ class BPMViewer:
         ttk.Button(buttons, text="Clear selection", command=self.clear_bpm_selection).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Bursting analysis...", command=lambda: BurstAnalysisWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
         ttk.Button(buttons, text="TBT raw logging control...", command=lambda: TBTControlWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Start TBT selected…", command=self.start_tbt_selected).pack(fill=tk.X, pady=2)

@@ -15,7 +15,12 @@ from bpm_core import (
     canonical_optics_mode,
     combine_selected_expressions,
     combination_expression,
+    band_limited_power,
+    capture_bpm_names,
+    capture_observables,
+    cross_spectrum_coherence,
     decimation_stride,
+    dispersion_response_score,
     estimate_iq_payload,
     find_spectrum_peaks,
     human_bytes,
@@ -26,6 +31,7 @@ from bpm_core import (
     phase_pipeline,
     pv_for,
     read_button_phasors,
+    spectrogram_power,
     spectrum,
     spectrum_pipeline,
     suggested_burst_bpms,
@@ -292,6 +298,57 @@ class BPMIQViewerTest(unittest.TestCase):
 
         self.assertEqual(norm.max(), 1.0)
         self.assertEqual([item[0] for item in peaks], [6.0, 2.0])
+
+    def test_burst_capture_observables_and_spectrogram(self):
+        fs = 1000.0
+        n = np.arange(4096)
+        burst_envelope = np.zeros_like(n, dtype=float)
+        burst_envelope[1400:2200] = 1.0
+        phase = 0.04 * np.sin(2 * np.pi * 50.0 * n / fs) * burst_envelope
+        z = np.exp(1j * phase)
+        arrays = {
+            "BPM1_A_complex": z,
+            "BPM1_B_complex": z,
+            "BPM1_C_complex": z,
+            "BPM1_D_complex": z,
+            "BPM1_sum_complex": 4.0 * z,
+        }
+
+        self.assertEqual(capture_bpm_names(arrays), ["BPM1"])
+        obs = capture_observables(arrays, "BPM1")
+        spec = spectrogram_power(obs["sum_phase_rad"], fs, nperseg=512, overlap=0.5)
+        times, band_power = band_limited_power(spec, 40.0, 60.0)
+
+        self.assertEqual(obs["sum_phase_rad"].shape, n.shape)
+        self.assertGreater(np.max(band_power), 10.0 * np.min(band_power + 1e-18))
+        self.assertTrue(times[np.argmax(band_power)] > 1.0)
+
+    def test_cross_spectrum_coherence_separates_shared_and_noise(self):
+        fs = 2000.0
+        rng = np.random.default_rng(123)
+        n = np.arange(8192)
+        shared = np.sin(2 * np.pi * 125.0 * n / fs)
+        x = shared + 0.2 * rng.normal(size=n.size)
+        y = 0.8 * shared + 0.2 * rng.normal(size=n.size)
+        z = rng.normal(size=n.size)
+
+        coh_xy = cross_spectrum_coherence(x, y, fs, nperseg=1024, overlap=0.5)
+        coh_xz = cross_spectrum_coherence(x, z, fs, nperseg=1024, overlap=0.5)
+        idx = int(np.argmin(np.abs(coh_xy["frequency_hz"] - 125.0)))
+
+        self.assertGreater(coh_xy["coherence"][idx], 0.8)
+        self.assertLess(coh_xz["coherence"][idx], 0.5)
+
+    def test_dispersion_response_score_identifies_dispersion_like_signal(self):
+        cfg = AppConfig.load(Path(__file__).with_name("bpm_config.json"))
+        names = [bpm.name for bpm in cfg.bpms[:8]]
+        s = np.asarray([bpm.s_m for bpm in cfg.bpms[:8]])
+        optics = basic_lattice_functions(s, "ssmb")
+        amplitudes = {name: abs(dx) for name, dx in zip(names, optics["dispersion_x_m"])}
+
+        score = dispersion_response_score(names, amplitudes, cfg, mode="ssmb")
+
+        self.assertGreater(score["corr_abs_dx"], 0.95)
 
     def test_control_room_snapshot_phase_spectrum_regression(self):
         fixture = Path(__file__).parent / "tests" / "fixtures" / "control_room_BPMZ1L2RP_sum_2048.npz"

@@ -164,6 +164,27 @@ delta[n] ~= (x_i[n] - x_0,i) / D_x,i
 
 Dispersion does not create the energy change. It converts momentum offset into transverse position. The longitudinal kicker can be in a zero-dispersion region; the energy spectrometer BPMs need accurately known nonzero dispersion.
 
+## CSR Bursting Context
+
+CSR microbunching / THz bursting is primarily an instability of the internal longitudinal distribution. BPMs do not measure that distribution directly. They can still test whether the bursting state is accompanied by measurable centroid or moment dynamics:
+
+```text
+sum phase          -> relative longitudinal arrival-centroid-like motion
+sum magnitude      -> common-mode/intensity-like changes
+horizontal ratio   -> transverse/dispersion-sensitive centroid proxy
+vertical ratio     -> transverse control proxy
+```
+
+Useful signatures to compare are:
+
+- narrow lines near measured synchrotron tune or harmonics
+- intermittent spectrogram power in the kHz to ~200 kHz range
+- coherence between sum phase and horizontal-like motion
+- stronger horizontal-like band power at high-`Dx` BPMs than low-`Dx` BPMs
+- lack of BPM centroid signal despite an external THz bursting signal
+
+The last case is a valid scientific outcome: it suggests the observed THz bursting may live mainly in higher moments/internal microstructure rather than the bunch centroid.
+
 ## Why One Dispersive BPM Is Not Always Enough
 
 The measured horizontal signal contains both betatron and dispersive motion:

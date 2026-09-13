@@ -112,6 +112,20 @@ Read-only raw captures are saved here:
 
 Each file contains complex arrays, separate I/Q arrays, a sum phasor per BPM, and `metadata_json`.
 
+## CSR / THz Bursting Analysis
+
+Use `Bursting analysis...` after saving one or more raw captures. The analysis window is read-only and can load the latest `.npz` capture automatically.
+
+Useful first pass:
+
+1. Select `Sum phase` and compare two BPMs with coherence enabled by choosing BPM A and BPM B.
+2. Look at the `1-200 kHz` spectrogram and band-power trace for intermittent activity.
+3. Switch to `Horizontal diff/sum` and compare high-`Dx` and low-`Dx` BPMs.
+4. Treat built-in dispersion checks as guides only until real low-alpha optics are imported.
+5. Remember that BPMs measure centroids/moments; a null BPM result can still be compatible with internal microbunching seen by THz diagnostics.
+
+More detail is in `docs/BURSTING_ANALYSIS.md`.
+
 ## If It Looks Blank
 
 1. Select one known BPM, for example `BPMZ1L2RP`.

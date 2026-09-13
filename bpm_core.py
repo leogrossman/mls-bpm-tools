@@ -82,6 +82,19 @@ class SpectrumSettings:
 
 
 @dataclass
+class BurstAnalysisSettings:
+    sample_rate_hz: float = DEFAULT_SAMPLE_RATE
+    nperseg: int = 4096
+    overlap: float = 0.75
+    window: str = "hann"
+    detrend: str = "linear"
+    min_frequency_hz: float = 1_000.0
+    max_frequency_hz: float = 200_000.0
+    band_low_hz: float = 1_000.0
+    band_high_hz: float = 200_000.0
+
+
+@dataclass
 class AppConfig:
     bpms: List[BPMInfo]
     pv_templates: Dict[str, str]
@@ -484,6 +497,228 @@ def find_spectrum_peaks(
             candidates.append((freq[i], p[i]))
     candidates.sort(key=lambda item: item[1], reverse=True)
     return candidates[:max(max_peaks, 0)]
+
+
+def segment_starts(n_samples: int, nperseg: int, overlap: float) -> np.ndarray:
+    n = max(int(n_samples), 0)
+    win = max(1, min(int(nperseg), n if n else int(nperseg)))
+    if n == 0:
+        return np.asarray([], dtype=int)
+    step = max(1, int(round(win * (1.0 - min(max(float(overlap), 0.0), 0.95)))))
+    starts = list(range(0, max(n - win + 1, 1), step))
+    if not starts:
+        starts = [0]
+    return np.asarray(starts, dtype=int)
+
+
+def welch_psd(
+    x: np.ndarray,
+    fs: float,
+    nperseg: int = 4096,
+    overlap: float = 0.5,
+    window: str = "hann",
+    detrend: str = "linear",
+) -> Dict[str, np.ndarray]:
+    raw = np.asarray(x, dtype=float).ravel()
+    if raw.size == 0:
+        raise ValueError("Cannot analyze empty signal")
+    win_len = max(8, min(int(nperseg), raw.size))
+    starts = segment_starts(raw.size, win_len, overlap)
+    win = _window_values(win_len, window)
+    spectra = []
+    for start in starts:
+        segment = raw[start:start + win_len]
+        if segment.size < win_len:
+            segment = np.pad(segment, (0, win_len - segment.size))
+        y = _detrend_signal(segment, detrend) * win
+        spec = np.fft.rfft(np.nan_to_num(y))
+        spectra.append((np.abs(spec) ** 2) / max(np.sum(win**2), 1.0))
+    psd = np.mean(np.vstack(spectra), axis=0)
+    freq = np.fft.rfftfreq(win_len, d=1.0 / fs)
+    return {"frequency_hz": freq, "psd": psd, "segment_starts": starts}
+
+
+def spectrogram_power(
+    x: np.ndarray,
+    fs: float,
+    nperseg: int = 4096,
+    overlap: float = 0.75,
+    window: str = "hann",
+    detrend: str = "linear",
+) -> Dict[str, np.ndarray]:
+    raw = np.asarray(x, dtype=float).ravel()
+    if raw.size == 0:
+        raise ValueError("Cannot analyze empty signal")
+    win_len = max(8, min(int(nperseg), raw.size))
+    starts = segment_starts(raw.size, win_len, overlap)
+    win = _window_values(win_len, window)
+    rows = []
+    for start in starts:
+        segment = raw[start:start + win_len]
+        if segment.size < win_len:
+            segment = np.pad(segment, (0, win_len - segment.size))
+        y = _detrend_signal(segment, detrend) * win
+        spec = np.fft.rfft(np.nan_to_num(y))
+        rows.append((np.abs(spec) ** 2) / max(np.sum(win**2), 1.0))
+    freq = np.fft.rfftfreq(win_len, d=1.0 / fs)
+    times = (starts + 0.5 * win_len) / fs
+    return {"frequency_hz": freq, "time_s": times, "power": np.asarray(rows).T}
+
+
+def band_limited_power(
+    spectrogram: Mapping[str, np.ndarray],
+    low_hz: float,
+    high_hz: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    freq = np.asarray(spectrogram["frequency_hz"], dtype=float)
+    time_s = np.asarray(spectrogram["time_s"], dtype=float)
+    power = np.asarray(spectrogram["power"], dtype=float)
+    mask = (freq >= low_hz) & (freq <= high_hz)
+    if not np.any(mask):
+        return time_s, np.zeros_like(time_s)
+    return time_s, np.nanmean(power[mask, :], axis=0)
+
+
+def cross_spectrum_coherence(
+    x: np.ndarray,
+    y: np.ndarray,
+    fs: float,
+    nperseg: int = 4096,
+    overlap: float = 0.5,
+    window: str = "hann",
+    detrend: str = "linear",
+) -> Dict[str, np.ndarray]:
+    x_arr = np.asarray(x, dtype=float).ravel()
+    y_arr = np.asarray(y, dtype=float).ravel()
+    n = min(x_arr.size, y_arr.size)
+    if n == 0:
+        raise ValueError("Cannot analyze empty signals")
+    x_arr = x_arr[:n]
+    y_arr = y_arr[:n]
+    win_len = max(8, min(int(nperseg), n))
+    starts = segment_starts(n, win_len, overlap)
+    win = _window_values(win_len, window)
+    pxx = []
+    pyy = []
+    pxy = []
+    for start in starts:
+        xs = x_arr[start:start + win_len]
+        ys = y_arr[start:start + win_len]
+        if xs.size < win_len:
+            xs = np.pad(xs, (0, win_len - xs.size))
+            ys = np.pad(ys, (0, win_len - ys.size))
+        xf = np.fft.rfft(np.nan_to_num(_detrend_signal(xs, detrend) * win))
+        yf = np.fft.rfft(np.nan_to_num(_detrend_signal(ys, detrend) * win))
+        scale = max(np.sum(win**2), 1.0)
+        pxx.append((np.abs(xf) ** 2) / scale)
+        pyy.append((np.abs(yf) ** 2) / scale)
+        pxy.append((xf * np.conjugate(yf)) / scale)
+    pxx_avg = np.mean(np.vstack(pxx), axis=0)
+    pyy_avg = np.mean(np.vstack(pyy), axis=0)
+    pxy_avg = np.mean(np.vstack(pxy), axis=0)
+    coherence = (np.abs(pxy_avg) ** 2) / np.maximum(pxx_avg * pyy_avg, 1e-300)
+    coherence = np.clip(np.real(coherence), 0.0, 1.0)
+    freq = np.fft.rfftfreq(win_len, d=1.0 / fs)
+    return {
+        "frequency_hz": freq,
+        "cross_spectrum": pxy_avg,
+        "coherence": coherence,
+        "phase_rad": np.angle(pxy_avg),
+        "pxx": pxx_avg,
+        "pyy": pyy_avg,
+    }
+
+
+def load_raw_bpm_capture(path: Path) -> Tuple[Dict[str, object], Dict[str, np.ndarray]]:
+    with np.load(path, allow_pickle=False) as data:
+        metadata: Dict[str, object] = {}
+        if "metadata_json" in data.files:
+            try:
+                metadata = json.loads(str(np.asarray(data["metadata_json"]).item()))
+            except Exception:
+                metadata = {}
+        arrays = {key: np.asarray(data[key]) for key in data.files if key != "metadata_json"}
+    return metadata, arrays
+
+
+def capture_bpm_names(arrays: Mapping[str, np.ndarray]) -> List[str]:
+    names = set()
+    for key in arrays:
+        match = re.match(r"(.+)_([ABCD]|sum)_complex$", key)
+        if match:
+            names.add(match.group(1))
+    return sorted(names)
+
+
+def capture_button_phasors(arrays: Mapping[str, np.ndarray], bpm: str) -> Dict[str, np.ndarray]:
+    out = {}
+    for button in BUTTONS:
+        key = f"{bpm}_{button}_complex"
+        if key in arrays:
+            out[button] = np.asarray(arrays[key], dtype=complex).ravel()
+        else:
+            i_key = f"{bpm}_{button}_I"
+            q_key = f"{bpm}_{button}_Q"
+            if i_key in arrays and q_key in arrays:
+                i = np.asarray(arrays[i_key], dtype=float).ravel()
+                q = np.asarray(arrays[q_key], dtype=float).ravel()
+                n = min(i.size, q.size)
+                out[button] = i[:n] + 1j * q[:n]
+    if not out:
+        raise KeyError(f"No button arrays for BPM {bpm}")
+    n_min = min(value.size for value in out.values())
+    return {key: value[:n_min] for key, value in out.items()}
+
+
+def capture_observables(
+    arrays: Mapping[str, np.ndarray],
+    bpm: str,
+    settings: Optional[SpectrumSettings] = None,
+) -> Dict[str, np.ndarray]:
+    spec_settings = settings or SpectrumSettings()
+    phasors = capture_button_phasors(arrays, bpm)
+    if f"{bpm}_sum_complex" in arrays:
+        total = np.asarray(arrays[f"{bpm}_sum_complex"], dtype=complex).ravel()
+    else:
+        total = sum(phasors[button] for button in phasors)
+    n = min([total.size] + [value.size for value in phasors.values()])
+    total = total[:n]
+    result = {
+        "sum_complex": total,
+        "sum_mag": np.abs(total),
+        "sum_phase_rad": phase_pipeline(total, spec_settings)["phase"],
+    }
+    if all(button in phasors for button in BUTTONS):
+        a = phasors["A"][:n]
+        b = phasors["B"][:n]
+        c = phasors["C"][:n]
+        d = phasors["D"][:n]
+        denom = np.where(np.abs(total) > 1e-30, total, np.nan + 1j * np.nan)
+        result["x_diff_over_sum_uncal"] = np.real(((a + b) - (c + d)) / denom)
+        result["y_diff_over_sum_uncal"] = np.real(((a + d) - (b + c)) / denom)
+    return result
+
+
+def dispersion_response_score(
+    bpm_names: Sequence[str],
+    amplitudes: Mapping[str, float],
+    cfg: AppConfig,
+    mode: str = "ssmb",
+) -> Dict[str, float]:
+    if len(bpm_names) < 2:
+        return {"corr_abs_dx": math.nan, "corr_dx": math.nan, "n": float(len(bpm_names))}
+    info_by_name = {bpm.name: bpm for bpm in cfg.bpms}
+    s = np.asarray([info_by_name[name].s_m for name in bpm_names if name in info_by_name], dtype=float)
+    used_names = [name for name in bpm_names if name in info_by_name]
+    optics = basic_lattice_functions(s, mode)
+    dx = np.asarray(optics["dispersion_x_m"], dtype=float)
+    amp = np.asarray([float(amplitudes.get(name, np.nan)) for name in used_names], dtype=float)
+    mask = np.isfinite(dx) & np.isfinite(amp)
+    if np.count_nonzero(mask) < 2 or np.std(amp[mask]) == 0:
+        return {"corr_abs_dx": math.nan, "corr_dx": math.nan, "n": float(np.count_nonzero(mask))}
+    corr_abs = float(np.corrcoef(np.abs(dx[mask]), amp[mask])[0, 1])
+    corr_dx = float(np.corrcoef(dx[mask], amp[mask])[0, 1]) if np.std(dx[mask]) > 0 else math.nan
+    return {"corr_abs_dx": corr_abs, "corr_dx": corr_dx, "n": float(np.count_nonzero(mask))}
 
 
 def parse_expressions(text: str) -> List[str]:

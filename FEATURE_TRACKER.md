@@ -33,6 +33,7 @@ This file tracks requested control-room BPM viewer work so implementation status
 - FFT/performance tab explains the raw-complex to spectrum pipeline with equations, a mini schematic, and notes on `df Hz`, `max time points`, and per-window settings.
 - TBT start/stop/check controls use the control-room `ddc_raw` and `ddc_synth` `.SCAN` PVs.
 - Dedicated TBT raw logging control window limits the touched BPM set, captures selected raw BPM arrays to `.npz` in read-only mode, previews exact writes, checks current `.SCAN` state, suggests a small SSMB burst-study BPM set, has a colored write-arm indicator, and supports timed auto-stop.
+- Offline CSR/THz bursting analysis window loads raw captures and plots centroid/moment observables, Welch spectra, spectrograms, band power, cross-BPM coherence, and guide-only dispersion correlation.
 - Safe mode blocks all writes and logs blocked attempts.
 - Real control-room BPM snapshot is included as a regression fixture.
 - Unit tests cover phase unwrap, MATLAB-style phase spectrum, FFT settings, TBT commands, and snapshot spectrum regression.
@@ -50,6 +51,7 @@ This file tracks requested control-room BPM viewer work so implementation status
 ## Not Yet Implemented
 
 - Full measured optics table import for standard user, low-alpha, and SSMB lattice functions.
+- Synchronized THz-detector import and BPM/THz cross-coherence.
 - Calibrated transverse x/y formulas using confirmed button geometry and BPM calibration constants.
 - Calibrated longitudinal phase-to-time conversion using confirmed DDC/RF reference frequency.
 - Multi-BPM dispersion/phase-space reconstruction.
