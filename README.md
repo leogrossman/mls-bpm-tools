@@ -59,6 +59,7 @@ That command is live read-only safe mode, not demo mode.
 
 - `python3 bpm_iq_viewer.py` uses live EPICS reads and blocks all writes.
 - TBT start/stop buttons only write in `--live --allow-writes`, after a confirmation dialog.
+- The `TBT raw logging control...` window limits raw logging to a reviewed small BPM set, supports an SSMB high/low dispersion suggestion, checks `.SCAN` status, previews writes, and can auto-stop back to `Passive`.
 - Optional tune/noise/status PVs are not read on startup.
 - Plot windows default to the `all` view with `A+B+C+D` first, then `A`; this shows raw magnitude, phase, phase spectrum, and magnitude spectrum.
 - Spectrum traces are normalized and visually stacked by default so multiple BPMs/signals can be compared without one trace hiding the rest.

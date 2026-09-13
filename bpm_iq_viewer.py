@@ -102,6 +102,7 @@ from bpm_core import (
     estimate_iq_payload,
     find_spectrum_peaks,
     human_bytes,
+    limited_unique_bpms,
     nearest_bpm_marker,
     normalize_button_tokens,
     normalize_power,
@@ -110,6 +111,7 @@ from bpm_core import (
     pv_for,
     read_button_phasors,
     spectrum_pipeline,
+    suggested_burst_bpms,
     tbt_scan_commands,
     tune_markers_from_values,
     tune_value_to_frequency,
@@ -1527,6 +1529,190 @@ class PVProbeWindow(tk.Toplevel):
                 self.app.session.event("pv_probe_error", method="cainfo", pv=pv, error=message)
 
 
+class TBTControlWindow(tk.Toplevel):
+    def __init__(self, app: "BPMViewer"):
+        super().__init__(app.root)
+        self.app = app
+        self.title("TBT raw logging control")
+        self.geometry("980x680")
+        self.selected_names: List[str] = []
+
+        top = ttk.Frame(self, padding=8)
+        top.pack(fill=tk.X)
+        ttk.Label(
+            top,
+            text=(
+                "Enable raw turn-by-turn BPM logging only for a small reviewed set. "
+                "Safe mode previews/blocks writes; write-capable mode still asks for confirmation."
+            ),
+            wraplength=760,
+            justify=tk.LEFT,
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(top, text="Load main selection", command=self.load_main_selection).pack(side=tk.RIGHT, padx=3)
+
+        controls = ttk.LabelFrame(self, text="Limited selection", padding=8)
+        controls.pack(fill=tk.X, padx=8, pady=(0, 8))
+        ttk.Label(controls, text="max BPMs").grid(row=0, column=0, sticky="w")
+        self.max_bpms_text = tk.StringVar(value="4")
+        ttk.Entry(controls, textvariable=self.max_bpms_text, width=8).grid(row=0, column=1, sticky="w", padx=(4, 12))
+        ttk.Label(controls, text="auto-stop seconds").grid(row=0, column=2, sticky="w")
+        self.auto_stop_seconds_text = tk.StringVar(value="30")
+        ttk.Entry(controls, textvariable=self.auto_stop_seconds_text, width=8).grid(row=0, column=3, sticky="w", padx=(4, 12))
+        ttk.Label(controls, text="SSMB high/low Dx suggestion").grid(row=0, column=4, sticky="w")
+        ttk.Button(controls, text="Suggest burst BPMs", command=self.load_ssmb_burst_suggestion).grid(row=0, column=5, sticky="ew", padx=(4, 0))
+        ttk.Label(
+            controls,
+            text="Start writes {bpm}:signals:ddc_raw.SCAN and ddc_synth.SCAN to the configured on value; stop writes both back to Passive.",
+            wraplength=820,
+            justify=tk.LEFT,
+        ).grid(row=1, column=0, columnspan=6, sticky="w", pady=(6, 0))
+        controls.columnconfigure(5, weight=1)
+
+        body = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        bpm_frame = ttk.LabelFrame(body, text="BPMs to touch", padding=6)
+        self.bpm_list = tk.Listbox(bpm_frame, selectmode=tk.EXTENDED, exportselection=False, height=18)
+        self.bpm_list.pack(fill=tk.BOTH, expand=True)
+        body.add(bpm_frame, weight=1)
+
+        status_frame = ttk.LabelFrame(body, text="Status / planned commands", padding=6)
+        self.status_text = tk.Text(status_frame, width=72, height=18, wrap="none")
+        self.status_text.pack(fill=tk.BOTH, expand=True)
+        body.add(status_frame, weight=2)
+
+        actions = ttk.Frame(self, padding=(8, 0, 8, 8))
+        actions.pack(fill=tk.X)
+        ttk.Button(actions, text="Check selected status", command=self.check_status).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions, text="Preview start writes", command=self.preview_start).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions, text="Start selected with auto-stop", command=self.start_selected).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions, text="Stop selected now", command=self.stop_selected).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions, text="Close", command=self.destroy).pack(side=tk.RIGHT, padx=3)
+
+        self.load_main_selection()
+
+    def max_bpms(self) -> int:
+        try:
+            value = int(self.max_bpms_text.get())
+        except ValueError:
+            value = 4
+        return min(max(value, 1), 12)
+
+    def auto_stop_seconds(self) -> int:
+        try:
+            value = int(float(self.auto_stop_seconds_text.get()))
+        except ValueError:
+            value = 30
+        return min(max(value, 1), 600)
+
+    def set_bpms(self, names: Sequence[str]) -> None:
+        known = [name for name in names if name in self.app.bpm_by_name]
+        self.selected_names = limited_unique_bpms(known, self.max_bpms())
+        self.bpm_list.delete(0, tk.END)
+        for name in self.selected_names:
+            info = self.app.bpm_by_name.get(name)
+            dx = info.dispersion_x_m if info else 0.0
+            self.bpm_list.insert(tk.END, f"{name:<10} section={info.section if info else ''} config_Dx={dx:.4g}")
+        self.write_status(f"Loaded {len(self.selected_names)} BPM(s): {', '.join(self.selected_names) or 'none'}")
+
+    def current_names(self) -> List[str]:
+        selected = list(self.bpm_list.curselection())
+        if selected:
+            return [self.selected_names[index] for index in selected if index < len(self.selected_names)]
+        return list(self.selected_names)
+
+    def load_main_selection(self) -> None:
+        names = self.app.selected_names()
+        if not names:
+            names = [bpm.name for bpm in self.app.known_bpms()]
+        self.set_bpms(names)
+
+    def load_ssmb_burst_suggestion(self) -> None:
+        names = suggested_burst_bpms(self.app.cfg, mode="ssmb", high_count=2, low_count=max(self.max_bpms() - 2, 0))
+        self.set_bpms(names)
+        self.app.select_named_bpms(self.selected_names)
+        self.write_status(
+            "Suggested SSMB burst set from built-in optics guide: high |Dx| BPMs plus low |Dx| references.\n"
+            "Review with the lattice viewer before enabling writes."
+        )
+
+    def write_status(self, text: str) -> None:
+        self.status_text.configure(state=tk.NORMAL)
+        self.status_text.delete("1.0", tk.END)
+        self.status_text.insert("1.0", text)
+        self.status_text.configure(state=tk.DISABLED)
+
+    def append_status(self, text: str) -> None:
+        self.status_text.configure(state=tk.NORMAL)
+        self.status_text.insert(tk.END, "\n" + text)
+        self.status_text.see(tk.END)
+        self.status_text.configure(state=tk.DISABLED)
+
+    def status_lines(self, names: Sequence[str]) -> List[str]:
+        self.app.sync_runtime_config()
+        lines: List[str] = []
+        for bpm in names:
+            for key in ("scan", "synth_scan"):
+                if key not in self.app.cfg.pv_templates:
+                    continue
+                pv = pv_for(self.app.cfg, bpm, key)
+                try:
+                    value = self.app.backend.get_value(pv)
+                    is_on = str(value) == str(self.app.cfg.raw_scan_on_value)
+                    state = "ON " if is_on else "OFF"
+                    lines.append(f"{state} {pv}: {value}")
+                    self.app.session.event("tbt_status_read", bpm=bpm, pv=pv, value=str(value), source="tbt_control")
+                except Exception as exc:
+                    lines.append(f"ERR {pv}: {exc}")
+                    self.app.session.event("tbt_status_error", bpm=bpm, pv=pv, error=str(exc), source="tbt_control")
+        return lines
+
+    def check_status(self) -> None:
+        names = self.current_names()
+        if not names:
+            messagebox.showinfo("Select BPM", "Load or select one or more BPMs first.", parent=self)
+            return
+        self.write_status("\n".join(self.status_lines(names)))
+        self.app.status.set(f"Checked raw TBT status for {len(names)} limited BPM(s).")
+
+    def preview_start(self) -> None:
+        names = self.current_names()
+        commands = self.app.tbt_commands(names, enabled=True)
+        lines = [f"caput {pv!r} {value!r}" for pv, value in commands]
+        lines.append("")
+        lines.append(f"Auto-stop setting: {self.auto_stop_seconds()} s")
+        lines.append(f"Write mode: {'ENABLED' if self.app.can_write_machine else 'BLOCKED/SAFE'}")
+        self.write_status("\n".join(lines))
+        self.app.session.event("tbt_control_preview", bpms=names, commands=[{"pv": pv, "value": value} for pv, value in commands])
+
+    def start_selected(self) -> None:
+        names = self.current_names()
+        if not names:
+            messagebox.showinfo("Select BPM", "Load or select one or more BPMs first.", parent=self)
+            return
+        if len(names) > self.max_bpms():
+            messagebox.showwarning("Too many BPMs", f"Limit is {self.max_bpms()} BPMs in this panel.", parent=self)
+            return
+        status = self.status_lines(names)
+        self.write_status("Pre-start status:\n" + "\n".join(status))
+        seconds = self.auto_stop_seconds()
+        commands = self.app.tbt_commands(names, enabled=True)
+        ok = self.app.confirm_and_write(commands, action=f"start limited TBT raw logging for {len(names)} BPM(s)")
+        if not ok:
+            self.append_status("\nStart did not execute or did not fully succeed.")
+            return
+        self.app.schedule_tbt_auto_stop(names, seconds)
+        self.append_status(f"\nStarted. Auto-stop scheduled in {seconds} s for: {', '.join(names)}")
+
+    def stop_selected(self) -> None:
+        names = self.current_names()
+        if not names:
+            messagebox.showinfo("Select BPM", "Load or select one or more BPMs first.", parent=self)
+            return
+        ok = self.app.confirm_and_write(self.app.tbt_commands(names, enabled=False), action=f"stop TBT raw logging for {len(names)} BPM(s)")
+        self.append_status("\nStop command completed." if ok else "\nStop did not execute or did not fully succeed.")
+
+
 class BPMViewer:
     def __init__(
         self,
@@ -1554,6 +1740,7 @@ class BPMViewer:
         self.displayed_bpm_names: List[str] = []
         self.strip_marker_positions: Dict[str, Tuple[float, float]] = {}
         self.plot_windows: List[PlotWindow] = []
+        self.tbt_auto_stop_after_id: Optional[str] = None
 
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
@@ -1612,6 +1799,7 @@ class BPMViewer:
         ttk.Button(buttons, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
+        ttk.Button(buttons, text="TBT raw logging control...", command=lambda: TBTControlWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Start TBT selected…", command=self.start_tbt_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Stop TBT selected…", command=self.stop_tbt_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Check TBT status", command=self.check_tbt_status).pack(fill=tk.X, pady=2)
@@ -1785,6 +1973,14 @@ class BPMViewer:
                 self.listbox.see(i)
                 self.draw_bpm_strip()
                 break
+
+    def select_named_bpms(self, names: Sequence[str]) -> None:
+        targets = set(names)
+        self.listbox.selection_clear(0, tk.END)
+        for i, name in enumerate(self.displayed_bpm_names):
+            if name in targets:
+                self.listbox.selection_set(i)
+        self.draw_bpm_strip()
 
     def selected_names(self) -> List[str]:
         return [self.displayed_bpm_names[i] for i in self.listbox.curselection()]
@@ -2044,6 +2240,8 @@ class BPMViewer:
     def close(self) -> None:
         if self.status_after_id:
             self.root.after_cancel(self.status_after_id)
+        if self.tbt_auto_stop_after_id:
+            self.root.after_cancel(self.tbt_auto_stop_after_id)
         self.root.destroy()
 
     def tbt_commands(self, names: Sequence[str], enabled: bool) -> List[Tuple[str, object]]:
@@ -2103,14 +2301,49 @@ class BPMViewer:
         box.configure(state=tk.DISABLED)
         self.status.set(f"Checked TBT status for {len(names)} BPM(s).")
 
-    def confirm_and_write(self, commands: Sequence[Tuple[str, object]], action: str = "write") -> None:
+    def schedule_tbt_auto_stop(self, names: Sequence[str], seconds: int) -> None:
+        if self.tbt_auto_stop_after_id:
+            try:
+                self.root.after_cancel(self.tbt_auto_stop_after_id)
+            except Exception:
+                pass
+            self.tbt_auto_stop_after_id = None
+
+        limited_names = list(names)
+
+        def stop_later() -> None:
+            self.tbt_auto_stop_after_id = None
+            commands = self.tbt_commands(limited_names, enabled=False)
+            self.session.event("tbt_auto_stop_firing", bpms=limited_names, commands=[{"pv": pv, "value": value} for pv, value in commands])
+            if not self.can_write_machine:
+                self.status.set("Auto-stop reached, but writes are blocked in this mode.")
+                return
+            errors = []
+            for pv, value in commands:
+                try:
+                    self.backend.put(pv, value)
+                    self.session.event("caput_success", pv=pv, value=value, source="tbt_auto_stop")
+                except Exception as exc:
+                    errors.append(f"{pv}: {exc}")
+                    self.session.event("caput_error", pv=pv, value=value, error=str(exc), source="tbt_auto_stop")
+            if errors:
+                messagebox.showerror("Auto-stop failed for some PVs", "\n".join(errors[:20]), parent=self.root)
+                self.status.set(f"TBT auto-stop completed with {len(errors)} error(s)")
+            else:
+                self.status.set(f"TBT auto-stop wrote Passive for {len(limited_names)} BPM(s)")
+
+        self.tbt_auto_stop_after_id = self.root.after(max(int(seconds), 1) * 1000, stop_later)
+        self.session.event("tbt_auto_stop_scheduled", bpms=limited_names, seconds=seconds)
+        self.status.set(f"TBT auto-stop scheduled in {seconds} s for {len(limited_names)} BPM(s)")
+
+    def confirm_and_write(self, commands: Sequence[Tuple[str, object]], action: str = "write") -> bool:
         preview = "\n".join(f"{pv} <- {value!r}" for pv, value in commands[:12])
         if len(commands) > 12:
             preview += f"\n… and {len(commands)-12} more"
         if not self.can_write_machine:
             self.session.event("blocked_write_attempt", commands=[{"pv": pv, "value": value} for pv, value in commands])
             messagebox.showwarning("Writes blocked", "Machine writes are blocked in this mode.\n\nPlanned writes:\n" + preview, parent=self.root)
-            return
+            return False
         ok = messagebox.askyesno(
             "Confirm EPICS writes",
             f"This will {action} on the machine. Review the exact commands:\n\n" + preview + "\n\nProceed?",
@@ -2120,7 +2353,7 @@ class BPMViewer:
         if not ok:
             self.session.event("write_cancelled", commands=[{"pv": pv, "value": value} for pv, value in commands])
             self.status.set("Write cancelled")
-            return
+            return False
         errors = []
         for pv, value in commands:
             try:
@@ -2133,8 +2366,10 @@ class BPMViewer:
         if errors:
             messagebox.showerror("Some writes failed", "\n".join(errors[:20]), parent=self.root)
             self.status.set(f"Completed with {len(errors)} error(s)")
+            return False
         else:
             self.status.set(f"Completed {len(commands)} EPICS write(s)")
+            return True
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

@@ -308,6 +308,48 @@ def tbt_scan_commands(cfg: AppConfig, names: Sequence[str], enabled: bool) -> Li
     return commands
 
 
+def limited_unique_bpms(names: Sequence[str], max_count: int) -> List[str]:
+    """Return unique BPM names capped to a deliberate operator-facing limit."""
+    limit = max(int(max_count), 0)
+    unique: List[str] = []
+    seen = set()
+    for name in names:
+        cleaned = str(name).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        unique.append(cleaned)
+        seen.add(cleaned)
+        if len(unique) >= limit:
+            break
+    return unique
+
+
+def suggested_burst_bpms(cfg: AppConfig, mode: str = "ssmb", high_count: int = 2, low_count: int = 2) -> List[str]:
+    """Suggest a small high/low dispersion BPM set for burst studies.
+
+    This uses the current built-in optics guide. It is intentionally small so a
+    write-capable TBT enable action does not accidentally touch the whole ring.
+    """
+    bpms = sorted(cfg.bpms, key=lambda item: item.s_m)
+    if not bpms:
+        return []
+    s = np.asarray([bpm.s_m for bpm in bpms], dtype=float)
+    optics = basic_lattice_functions(s, mode)
+    dispersion = np.abs(np.asarray(optics["dispersion_x_m"], dtype=float))
+    order_high = list(np.argsort(-dispersion))
+    order_low = list(np.argsort(dispersion))
+    names: List[str] = []
+    for index in order_high[: max(int(high_count), 0)]:
+        names.append(bpms[int(index)].name)
+    for index in order_low:
+        name = bpms[int(index)].name
+        if name not in names:
+            names.append(name)
+        if len(names) >= max(int(high_count), 0) + max(int(low_count), 0):
+            break
+    return names
+
+
 def combination_expression(data: Mapping[str, np.ndarray], expr: str) -> np.ndarray:
     expr = re.sub(r"\b([abcd])\b", lambda match: match.group(1).upper(), expr.strip())
     env = {k: np.asarray(v) for k, v in data.items()}

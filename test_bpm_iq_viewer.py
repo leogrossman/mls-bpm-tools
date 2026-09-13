@@ -19,6 +19,7 @@ from bpm_core import (
     estimate_iq_payload,
     find_spectrum_peaks,
     human_bytes,
+    limited_unique_bpms,
     nearest_bpm_marker,
     normalize_button_tokens,
     normalize_power,
@@ -27,6 +28,7 @@ from bpm_core import (
     read_button_phasors,
     spectrum,
     spectrum_pipeline,
+    suggested_burst_bpms,
     tbt_scan_commands,
     tune_markers_from_values,
     tune_value_to_frequency,
@@ -217,6 +219,17 @@ class BPMIQViewerTest(unittest.TestCase):
                 ("BPMZ1L2RP:signals:ddc_synth.SCAN", "Passive"),
             ],
         )
+
+    def test_limited_tbt_selection_and_burst_suggestion(self):
+        cfg = AppConfig.load(Path(__file__).with_name("bpm_config.json"))
+
+        self.assertEqual(limited_unique_bpms(["A", "B", "A", "", "C"], max_count=2), ["A", "B"])
+
+        names = suggested_burst_bpms(cfg, mode="ssmb", high_count=2, low_count=2)
+
+        self.assertEqual(len(names), 4)
+        self.assertEqual(len(set(names)), 4)
+        self.assertTrue(all(name in {bpm.name for bpm in cfg.bpms} for name in names))
 
     def test_spectrum_peak_near_known_signal(self):
         fs = 1000.0

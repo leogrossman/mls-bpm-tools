@@ -27,6 +27,15 @@ start: 1 second
 stop:  Passive
 ```
 
+The copied legacy scripts are intentionally broad:
+
+```text
+scripts/starttbt: caput_many signals:ddc_raw.SCAN "1 second"; caput_many signals:ddc_synth.SCAN "1 second"
+scripts/stoptbt:  caput_many signals:ddc_raw.SCAN "Passive";  caput_many signals:ddc_synth.SCAN "Passive"
+```
+
+The GUI `TBT raw logging control...` window is narrower by design. It limits the reviewed BPM list, reads the current `.SCAN` status first, previews exact PV writes, and can schedule an auto-stop back to `Passive`. Safe/default mode still blocks all writes.
+
 ## Read-Only Probe Commands
 
 ```bash

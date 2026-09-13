@@ -75,7 +75,17 @@ The `Tune status / spectrum peaks` pane lists:
 
 ## TBT Raw Logging
 
-In normal mode, TBT write buttons are blocked. Use `Check TBT status` to read:
+In normal mode, TBT write buttons are blocked. Use `TBT raw logging control...` for the safer workflow:
+
+1. Load the current BPM selection, or click `Suggest burst BPMs` for a small SSMB-oriented high/low dispersion set.
+2. Keep `max BPMs` small, usually 2-4 BPMs while other experiments are running.
+3. Click `Check selected status` before changing anything.
+4. Click `Preview start writes` and review every PV/value.
+5. Only in write-capable mode, click `Start selected with auto-stop`.
+6. Confirm the EPICS writes in the warning dialog.
+7. Verify that the auto-stop setting is short enough for the study.
+
+The panel writes only the selected BPMs, unlike the original shell scripts which used `caput_many` broadly. The start command writes:
 
 ```text
 {bpm}:signals:ddc_raw.SCAN
@@ -89,6 +99,8 @@ python3 bpm_iq_viewer.py --live --allow-writes
 ```
 
 Start writes `"1 second"` and stop writes `"Passive"` to both raw and synth `.SCAN` PVs.
+
+The `Suggest burst BPMs` button currently uses the built-in SSMB optics guide to choose a tiny mix of high-`|Dx|` BPMs and low-`|Dx|` reference BPMs. Treat it as a practical starting set for burst/longitudinal-phase studies, not a machine-approved optics table.
 
 ## If It Looks Blank
 
