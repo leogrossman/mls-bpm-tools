@@ -106,6 +106,7 @@ from bpm_core import (
     decimation_stride,
     dispersion_response_score,
     estimate_iq_payload,
+    estimate_raw_capture_storage,
     find_spectrum_peaks,
     human_bytes,
     limited_unique_bpms,
@@ -210,7 +211,7 @@ class PlotWindow(tk.Toplevel):
         ttk.Combobox(
             controls,
             textvariable=self.plot_kind,
-            values=("all", "phase", "magnitude", "spectra", "phase debug", "raw buttons", "I/Q", "position-like"),
+            values=("all", "bursting", "phase", "magnitude", "spectra", "phase debug", "raw buttons", "I/Q", "position-like"),
             state="readonly",
             width=16,
         ).pack(side=tk.LEFT)
@@ -650,9 +651,22 @@ class PlotWindow(tk.Toplevel):
         for bpm, items in self.last_data.items():
             for key, value in items.items():
                 flat[f"{bpm}_{key}"] = value
-        np.savez_compressed(path, **flat)
-        self.app.session.event("save_data", path=path, bpms=list(self.last_data))
-        self.status.set(f"Saved {path}")
+        target = Path(path)
+        tmp_path = target.with_suffix(target.suffix + ".tmp")
+        try:
+            with tmp_path.open("wb") as handle:
+                np.savez_compressed(handle, **flat)
+            tmp_path.replace(target)
+            self.app.session.event("save_data", path=path, bpms=list(self.last_data))
+            self.status.set(f"Saved {path}")
+        except Exception as exc:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+            self.app.session.event("save_data_error", path=path, error=str(exc))
+            messagebox.showerror("Save failed", str(exc), parent=self)
 
     def spectrum_settings(self) -> SpectrumSettings:
         try:
@@ -754,7 +768,17 @@ class PlotWindow(tk.Toplevel):
             arrays["combined"] = z[:limit]
             arrays["raw_phase"] = np.angle(z[:limit])
             arrays["unwrapped_phase"] = np.unwrap(np.angle(z[:limit]))
-            np.savez_compressed(path, **arrays)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            try:
+                with tmp_path.open("wb") as handle:
+                    np.savez_compressed(handle, **arrays)
+                tmp_path.replace(path)
+            finally:
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except Exception:
+                        pass
             self.app.session.event("raw_snapshot_saved", bpm=bpm, expression=expr, path=str(path), samples=limit)
         except Exception as exc:
             self.app.session.event("raw_snapshot_error", bpm=bpm, expression=expr, error=str(exc))
@@ -858,6 +882,8 @@ class PlotWindow(tk.Toplevel):
             axes = [self.figure.add_subplot(221), self.figure.add_subplot(222), self.figure.add_subplot(223), self.figure.add_subplot(224)]
         elif kind == "phase debug":
             axes = [self.figure.add_subplot(411), self.figure.add_subplot(412), self.figure.add_subplot(413), self.figure.add_subplot(414)]
+        elif kind == "bursting":
+            axes = [self.figure.add_subplot(221), self.figure.add_subplot(222), self.figure.add_subplot(223), self.figure.add_subplot(224)]
         elif kind in ("phase", "magnitude", "spectra"):
             axes = [self.figure.add_subplot(211), self.figure.add_subplot(212)]
         else:
@@ -869,10 +895,10 @@ class PlotWindow(tk.Toplevel):
         if kind in ("position-like", "raw buttons"):
             buttons_needed = list(BUTTONS) if any("+" in expr or "-" in expr or "mean" in expr or "sum" in expr for expr in expressions) else buttons_needed
         buttons_to_plot = buttons_needed or ["A"]
-        needs_phase = kind in ("phase", "all", "spectra", "phase debug")
+        needs_phase = kind in ("phase", "all", "spectra", "phase debug", "bursting")
         needs_magnitude = kind in ("magnitude", "all", "spectra")
-        needs_spectrum = kind in ("phase", "magnitude", "all", "spectra", "phase debug")
-        needs_phase_spectrum = kind in ("phase", "all", "spectra", "phase debug")
+        needs_spectrum = kind in ("phase", "magnitude", "all", "spectra", "phase debug", "bursting")
+        needs_phase_spectrum = kind in ("phase", "all", "spectra", "phase debug", "bursting")
         needs_magnitude_spectrum = kind in ("magnitude", "all", "spectra")
         settings = self.spectrum_settings() if needs_spectrum else SpectrumSettings()
         self.last_data = {}
@@ -1062,6 +1088,59 @@ class PlotWindow(tk.Toplevel):
                     axes[3].set_ylabel(self._spectrum_ylabel("PSD"))
                     axes[3].set_xlabel(self._frequency_xlabel())
                     axes[3].set_xlim(*self._frequency_xlim())
+                elif kind == "bursting":
+                    assert phase is not None
+                    phase = np.asarray(phase)
+                    phase_turns, plot_phase = self.decimated_xy(turns, phase)
+                    axes[0].plot(phase_turns, plot_phase, label=display_label, linewidth=0.9)
+                    phase_spec = analysis.get("phase_spec") or spectrum_pipeline(phase, self.app.cfg.sample_rate_hz, settings)
+                    p_raw = phase_spec["psd"]
+                    p = normalize_power(p_raw) if self.normalize_spectra.get() else p_raw
+                    self._record_peaks(peak_records, label, "phase", phase_spec["frequency_hz"], p)
+                    spec_key = f"{trace_key}:phase"
+                    line = axes[1].semilogy(
+                        self._frequency_axis_values(phase_spec["frequency_hz"]),
+                        self._spectrum_display_power(p, trace_index, spec_key),
+                        label=display_label,
+                        alpha=self.spectrum_alpha(),
+                        linewidth=self.spectrum_linewidth(),
+                    )[0]
+                    self._remember_spectrum_line(line, p, trace_index, spec_key)
+                    nperseg = min(max(256, settings.nfft or 4096), max(256, phase.size))
+                    burst_settings = BurstAnalysisSettings(
+                        sample_rate_hz=self.app.cfg.sample_rate_hz,
+                        nperseg=nperseg,
+                        overlap=0.75,
+                        window=settings.window,
+                        detrend=settings.detrend,
+                        band_low_hz=1_000.0,
+                        band_high_hz=200_000.0,
+                    )
+                    sg = spectrogram_power(phase, burst_settings.sample_rate_hz, burst_settings.nperseg, burst_settings.overlap, burst_settings.window, burst_settings.detrend)
+                    band_time, band_power = band_limited_power(sg, burst_settings.band_low_hz, burst_settings.band_high_hz)
+                    if trace_index == 0:
+                        extent = [
+                            sg["time_s"][0] if sg["time_s"].size else 0.0,
+                            sg["time_s"][-1] if sg["time_s"].size else 0.0,
+                            sg["frequency_hz"][0] / 1000.0,
+                            sg["frequency_hz"][-1] / 1000.0,
+                        ]
+                        sg_power = 10.0 * np.log10(np.maximum(sg["power"], 1e-30))
+                        axes[2].imshow(sg_power, aspect="auto", origin="lower", extent=extent, cmap="magma")
+                        axes[2].set_ylim(0.0, 200.0)
+                    axes[3].plot(band_time, band_power, label=display_label, linewidth=0.9, alpha=0.75)
+                    axes[0].set_title("sum phase / selected signal phase")
+                    axes[0].set_ylabel("unwrapped phase [rad]")
+                    axes[1].set_title("phase spectrum")
+                    axes[1].set_xlabel(self._frequency_xlabel())
+                    axes[1].set_ylabel(self._spectrum_ylabel("phase PSD"))
+                    axes[1].set_xlim(*self._frequency_xlim())
+                    axes[2].set_title("phase spectrogram, first trace [dB arb.]")
+                    axes[2].set_xlabel("time [s]")
+                    axes[2].set_ylabel("frequency [kHz]")
+                    axes[3].set_title("1-200 kHz band power")
+                    axes[3].set_xlabel("time [s]")
+                    axes[3].set_ylabel("mean PSD [arb.]")
                 else:  # all
                     assert phase is not None
                     phase = np.asarray(phase)
@@ -1125,6 +1204,7 @@ class PlotWindow(tk.Toplevel):
                 (kind in ("phase", "magnitude") and index == 1)
                 or kind == "spectra"
                 or (kind == "phase debug" and index == 3)
+                or (kind == "bursting" and index == 1)
                 or (kind == "all" and index >= 2)
             )
             if tune_markers and is_spectrum_axis:
@@ -1556,7 +1636,7 @@ class TBTControlWindow(tk.Toplevel):
             top,
             text=(
                 "Enable raw turn-by-turn BPM logging only for a small reviewed set. "
-                "Safe mode previews/blocks writes; write-capable mode still asks for confirmation."
+                "Normal startup is read-only. Use the main red/green write button only when you intentionally want to start/stop raw TBT logging."
             ),
             wraplength=760,
             justify=tk.LEFT,
@@ -1590,19 +1670,23 @@ class TBTControlWindow(tk.Toplevel):
         capture.pack(fill=tk.X, padx=8, pady=(0, 8))
         ttk.Label(capture, text="captures").grid(row=0, column=0, sticky="w")
         self.capture_count_text = tk.StringVar(value="1")
+        self.capture_count_text.trace_add("write", lambda *_args: self.update_capture_estimate())
         ttk.Entry(capture, textvariable=self.capture_count_text, width=8).grid(row=0, column=1, sticky="w", padx=(4, 12))
         ttk.Label(capture, text="interval s").grid(row=0, column=2, sticky="w")
         self.capture_interval_text = tk.StringVar(value="3")
+        self.capture_interval_text.trace_add("write", lambda *_args: self.update_capture_estimate())
         ttk.Entry(capture, textvariable=self.capture_interval_text, width=8).grid(row=0, column=3, sticky="w", padx=(4, 12))
         ttk.Button(capture, text="Capture raw arrays now", command=self.capture_once).grid(row=0, column=4, sticky="ew", padx=3)
         ttk.Button(capture, text="Start capture series", command=self.start_capture_series).grid(row=0, column=5, sticky="ew", padx=3)
         ttk.Button(capture, text="Stop capture series", command=self.stop_capture_series).grid(row=0, column=6, sticky="ew", padx=3)
+        self.capture_estimate_var = tk.StringVar(value="")
+        ttk.Label(capture, textvariable=self.capture_estimate_var).grid(row=1, column=0, columnspan=7, sticky="w", pady=(6, 0))
         ttk.Label(
             capture,
-            text="This only reads the selected BPM I/Q waveform PVs and writes .npz files under the session log directory. It works in read-only mode.",
+            text="Read-only capture reads selected BPM I/Q waveform PVs and saves atomic .npz files under the session log directory. It works with writes locked.",
             wraplength=820,
             justify=tk.LEFT,
-        ).grid(row=1, column=0, columnspan=7, sticky="w", pady=(6, 0))
+        ).grid(row=2, column=0, columnspan=7, sticky="w", pady=(3, 0))
         capture.columnconfigure(6, weight=1)
 
         body = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -1627,6 +1711,7 @@ class TBTControlWindow(tk.Toplevel):
         ttk.Button(actions, text="Close", command=self.destroy).pack(side=tk.RIGHT, padx=3)
 
         self.load_main_selection()
+        self.update_capture_estimate()
 
     def destroy(self) -> None:
         self.stop_capture_series()
@@ -1635,7 +1720,7 @@ class TBTControlWindow(tk.Toplevel):
     def update_write_lamp(self) -> None:
         if not self.app.can_write_machine:
             self.write_armed.set(False)
-            self.write_lamp.configure(text="SAFE read-only", bg="#c9c9c9", fg="#202020")
+            self.write_lamp.configure(text="READ-ONLY", bg="#2e7d32", fg="white")
             return
         if self.write_armed.get():
             self.write_lamp.configure(text="WRITES ARMED", bg="#d65f5f", fg="white")
@@ -1670,6 +1755,23 @@ class TBTControlWindow(tk.Toplevel):
             value = 3.0
         return int(round(min(max(value, 0.1), 3600.0) * 1000.0))
 
+    def update_capture_estimate(self) -> None:
+        if not hasattr(self, "capture_estimate_var"):
+            return
+        names = self.current_names()
+        samples = 8192
+        count = self.capture_count()
+        one = estimate_raw_capture_storage(len(names), samples, 1)
+        total = estimate_raw_capture_storage(len(names), samples, count)
+        ten_min_count = max(1, int(round(600_000 / max(self.capture_interval_ms(), 1))))
+        ten_min = estimate_raw_capture_storage(len(names), samples, ten_min_count)
+        self.capture_estimate_var.set(
+            f"Storage estimate: {human_bytes(one['bytes'])}/capture, "
+            f"{human_bytes(total['bytes'])} for this series, "
+            f"~{human_bytes(ten_min['bytes'])} for 10 min at this interval "
+            f"(uses 8192 samples/waveform planning value; compressed files may be smaller)."
+        )
+
     def set_bpms(self, names: Sequence[str]) -> None:
         known = [name for name in names if name in self.app.bpm_by_name]
         self.selected_names = limited_unique_bpms(known, self.max_bpms())
@@ -1679,6 +1781,7 @@ class TBTControlWindow(tk.Toplevel):
             dx = info.dispersion_x_m if info else 0.0
             self.bpm_list.insert(tk.END, f"{name:<10} section={info.section if info else ''} config_Dx={dx:.4g}")
         self.write_status(f"Loaded {len(self.selected_names)} BPM(s): {', '.join(self.selected_names) or 'none'}")
+        self.update_capture_estimate()
 
     def current_names(self) -> List[str]:
         selected = list(self.bpm_list.curselection())
@@ -1700,6 +1803,7 @@ class TBTControlWindow(tk.Toplevel):
             "Suggested SSMB burst set from built-in optics guide: high |Dx| BPMs plus low |Dx| references.\n"
             "Review with the lattice viewer before enabling writes."
         )
+        self.update_capture_estimate()
 
     def write_status(self, text: str) -> None:
         self.status_text.configure(state=tk.NORMAL)
@@ -1760,7 +1864,7 @@ class TBTControlWindow(tk.Toplevel):
         if not self.app.can_write_machine:
             messagebox.showwarning(
                 "Writes blocked",
-                "This run is read-only. Restart with:\n\npython3 bpm_iq_viewer.py --live --allow-writes\n\nRaw data capture still works.",
+                "Writes are locked. Use the big main-window READ ONLY / WRITE MODE button first.\n\nRaw data capture still works with writes locked.",
                 parent=self,
             )
             return False
@@ -1815,11 +1919,28 @@ class TBTControlWindow(tk.Toplevel):
         metadata["errors"] = errors
         path = self.raw_capture_dir() / f"raw_bpm_{stamp}_{len(names)}bpms.npz"
         arrays["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True, default=str))
-        np.savez_compressed(path, **arrays)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        try:
+            with tmp_path.open("wb") as handle:
+                np.savez_compressed(handle, **arrays)
+            tmp_path.replace(path)
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+        sample_count = 0
+        for key, value in arrays.items():
+            if key.endswith("_A_complex"):
+                sample_count = int(np.asarray(value).size)
+                break
+        storage = estimate_raw_capture_storage(len(names), sample_count or 8192, 1)
         lines = [
             f"Saved raw BPM capture: {path}",
             f"BPMs: {', '.join(names)}",
             f"Arrays: {len(arrays) - 1}",
+            f"Approx uncompressed payload: {human_bytes(storage['bytes'])}",
         ]
         if errors:
             lines.append("Errors:")
@@ -2251,6 +2372,7 @@ class BPMViewer:
         backend: Backend,
         mode_label: str,
         can_write_machine: bool,
+        write_unlock_available: bool,
         session: SessionLogger,
     ):
         self.root = root
@@ -2258,6 +2380,7 @@ class BPMViewer:
         self.backend = backend
         self.mode_label = mode_label
         self.can_write_machine = can_write_machine
+        self.write_unlock_available = write_unlock_available
         self.session = session
         self.root.title("MLS BPM I/Q Viewer")
         self.root.geometry("1120x820")
@@ -2275,12 +2398,24 @@ class BPMViewer:
         main = ttk.Frame(root, padding=8)
         main.pack(fill=tk.BOTH, expand=True)
 
+        topbar = ttk.Frame(main)
+        topbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         ttk.Label(
-            main,
-            text="Click a BPM marker below or double-click a BPM in the list to open a live viewer. Start in safe/read-only mode unless writes are explicitly allowed.",
-            wraplength=760,
+            topbar,
+            text="Click a BPM marker or double-click the BPM list to open live plots. Normal startup is read-only; unlock writes only for limited TBT start/stop actions.",
+            wraplength=700,
             justify=tk.LEFT,
-        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.write_mode_button = tk.Button(
+            topbar,
+            text="READ ONLY\nwrites locked",
+            width=18,
+            height=2,
+            command=self.toggle_global_write_mode,
+            relief=tk.GROOVE,
+        )
+        self.write_mode_button.pack(side=tk.RIGHT, padx=(8, 0))
+        self.update_global_write_button()
 
         strip_box = ttk.LabelFrame(main, text="BPM lattice overview", padding=4)
         strip_box.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
@@ -2329,9 +2464,10 @@ class BPMViewer:
         ttk.Button(buttons, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Bursting analysis...", command=lambda: BurstAnalysisWindow(self)).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Raw TBT on/off + capture...", command=lambda: TBTControlWindow(self)).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
         ttk.Button(buttons, text="TBT raw logging control...", command=lambda: TBTControlWindow(self)).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Start TBT selected…", command=self.start_tbt_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(buttons, text="Open TBT start panel…", command=self.start_tbt_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Stop TBT selected…", command=self.stop_tbt_selected).pack(fill=tk.X, pady=2)
         ttk.Button(buttons, text="Check TBT status", command=self.check_tbt_status).pack(fill=tk.X, pady=2)
         ttk.Separator(buttons).pack(fill=tk.X, pady=8)
@@ -2396,6 +2532,50 @@ class BPMViewer:
 
     def unregister_plot_window(self, window: PlotWindow) -> None:
         self.plot_windows = [item for item in self.plot_windows if item is not window and item.winfo_exists()]
+
+    def update_global_write_button(self) -> None:
+        if not hasattr(self, "write_mode_button"):
+            return
+        if not self.write_unlock_available:
+            self.can_write_machine = False
+            self.write_mode_button.configure(text="READ ONLY\nno live writes", bg="#bfbfbf", fg="#202020")
+        elif self.can_write_machine:
+            self.write_mode_button.configure(text="WRITE MODE ON\nclick to lock", bg="#c62828", fg="white")
+        else:
+            self.write_mode_button.configure(text="READ ONLY\nclick to unlock", bg="#2e7d32", fg="white")
+
+    def toggle_global_write_mode(self) -> None:
+        if not self.write_unlock_available:
+            messagebox.showinfo(
+                "Writes unavailable",
+                "This run cannot write to EPICS. Demo mode and explicit --safe mode keep writes locked.",
+                parent=self.root,
+            )
+            return
+        if self.can_write_machine:
+            self.can_write_machine = False
+            self.session.event("global_write_mode_disabled")
+            self.update_global_write_button()
+            self.status.set("Write mode locked. EPICS writes are blocked.")
+            return
+        ok = messagebox.askyesno(
+            "Enable EPICS write mode?",
+            (
+                "This unlocks write-capable mode for this GUI session.\n\n"
+                "It does not write anything by itself. TBT start/stop still requires the limited BPM list, "
+                "the TBT window arm switch, and a final exact-command confirmation dialog.\n\n"
+                "Keep this off unless you are intentionally enabling/disabling raw BPM TBT logging."
+            ),
+            icon="warning",
+            parent=self.root,
+        )
+        if not ok:
+            self.session.event("global_write_mode_enable_cancelled")
+            return
+        self.can_write_machine = True
+        self.session.event("global_write_mode_enabled")
+        self.update_global_write_button()
+        self.status.set("WRITE MODE ON. Review limited BPM list and confirmation dialogs before any TBT write.")
 
     def open_plot_bpm_names(self, exclude: Optional[PlotWindow] = None) -> List[str]:
         names: List[str] = []
@@ -2604,12 +2784,13 @@ class BPMViewer:
     def show_help(self) -> None:
         text = (
             "Quick control-room flow\n\n"
-            "1. Start safe: python3 bpm_iq_viewer.py --safe\n"
+            "1. Start normally: python3 bpm_iq_viewer.py\n"
             "2. Select one or more BPMs. Starred BPMs are known from local betagui / CS-Studio material.\n"
             "3. Click Open selected plot. Sum A+B+C+D opens first; add A/B/C/D or other expressions as needed.\n"
-            "4. For spectra, enable tune markers in the plot window. Tune PVs are read only when requested.\n"
+            "4. Use plot type 'bursting' for live phase PSD, spectrogram, and 1-200 kHz band power.\n"
             "5. If a PV is wrong, edit it in the table or PV probe, then Save config.\n"
-            "6. Enable BPM logging only after reviewing Show planned enable commands. In --safe mode writes are blocked.\n\n"
+            "6. Raw TBT data capture works with writes locked.\n"
+            "7. To start/stop raw TBT logging, unlock the large main write button, use the limited TBT window, arm writes there, and confirm exact commands.\n\n"
             "Useful raw PV pattern\n"
             "{bpm}:signals:ddc_raw.SCAN = enable/scan control\n"
             "{bpm}:signals:ddc_raw.Ia/Qa ... Id/Qd = raw complex button turns\n\n"
@@ -2799,7 +2980,10 @@ class BPMViewer:
         if not names:
             messagebox.showinfo("Select BPM", "Select one or more BPMs first.", parent=self.root)
             return
-        self.confirm_and_write(self.tbt_commands(names, enabled=True), action="start TBT raw logging")
+        win = TBTControlWindow(self)
+        win.set_bpms(names)
+        win.preview_start()
+        self.status.set("Use the limited Raw TBT control window to arm and start selected BPMs.")
 
     def stop_tbt_selected(self) -> None:
         names = self.selected_names()
@@ -2909,7 +3093,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--safe", action="store_true", help="use live EPICS reads but block all machine writes; this is also the default")
     p.add_argument("--demo", action="store_true", help="use synthetic waveforms and no EPICS connection")
     p.add_argument("--live", action="store_true", help="use live EPICS reads")
-    p.add_argument("--allow-writes", action="store_true", help="allow confirmed EPICS writes; requires --live and is blocked by --safe")
+    p.add_argument("--allow-writes", action="store_true", help="legacy: start with GUI write mode already unlocked; normal use can unlock writes from the main window")
     p.add_argument("--bpm", action="append", default=[], help="open plot for BPM at startup; repeatable")
     p.add_argument("--combination", default="A+B+C+D; A", help="startup signal expression list for --bpm")
     p.add_argument("--no-startup-plot", action="store_true", help="legacy no-op; startup plots are off unless --bpm is used")
@@ -2939,15 +3123,15 @@ def configure_logging(log_root: Path, log_level: str) -> SessionLogger:
 
 
 def runtime_mode_from_args(args: argparse.Namespace) -> Tuple[bool, bool, str]:
-    if args.allow_writes and (args.safe or args.demo or not args.live):
-        raise SystemExit("--allow-writes requires --live and cannot be combined with --safe or --demo")
+    if args.allow_writes and (args.safe or args.demo):
+        raise SystemExit("--allow-writes cannot be combined with --safe or --demo")
     use_demo = bool(args.demo)
-    can_write_machine = bool(args.allow_writes and args.live and not use_demo)
+    can_write_machine = bool(args.allow_writes and not use_demo)
     if use_demo:
         return False, False, "DEMO: synthetic data, no machine access"
     if can_write_machine:
         return True, True, "LIVE WRITE-CAPABLE: every machine write asks for confirmation"
-    return True, False, "LIVE SAFE: EPICS reads allowed, machine writes blocked"
+    return True, False, "LIVE READ-ONLY: EPICS reads allowed; unlock writes in the GUI only when needed"
 
 
 def main() -> int:
@@ -2969,7 +3153,16 @@ def main() -> int:
         log_dir=str(session.session_dir),
     )
     root = tk.Tk()
-    app = BPMViewer(root, cfg, backend, mode_label=mode_label, can_write_machine=can_write_machine, session=session)
+    write_unlock_available = bool(use_live and not args.safe and not args.demo)
+    app = BPMViewer(
+        root,
+        cfg,
+        backend,
+        mode_label=mode_label,
+        can_write_machine=can_write_machine,
+        write_unlock_available=write_unlock_available,
+        session=session,
+    )
     if args.bpm:
         root.after(150, lambda: PlotWindow(app, args.bpm, expression=args.combination, show_tunes=False))
     root.mainloop()

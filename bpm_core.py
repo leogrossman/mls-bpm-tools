@@ -235,6 +235,28 @@ def estimate_iq_payload(n_bpms: int, n_buttons: int, n_samples: int, bytes_per_s
     return {"pv_count": float(pv_count), "samples": float(samples), "bytes": float(bytes_total)}
 
 
+def estimate_raw_capture_storage(n_bpms: int, n_samples: int, n_captures: int = 1) -> Dict[str, float]:
+    """Estimate uncompressed raw-capture storage for saved .npz payloads.
+
+    Each BPM capture stores A/B/C/D as complex arrays, separate I and Q arrays
+    for debugging, plus one sum-complex array. NumPy compression can reduce the
+    final file size, but the uncompressed estimate is the safe upper planning
+    number to show in the GUI.
+    """
+    bpms = max(int(n_bpms), 0)
+    samples = max(int(n_samples), 0)
+    captures = max(int(n_captures), 0)
+    bytes_per_bpm_sample = 4 * (16 + 8 + 8) + 16
+    bytes_total = bpms * samples * captures * bytes_per_bpm_sample
+    return {
+        "bytes": float(bytes_total),
+        "bytes_per_bpm_sample": float(bytes_per_bpm_sample),
+        "bpms": float(bpms),
+        "samples": float(samples),
+        "captures": float(captures),
+    }
+
+
 def human_bytes(value: float) -> str:
     units = ("B", "KiB", "MiB", "GiB")
     amount = float(value)

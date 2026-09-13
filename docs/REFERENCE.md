@@ -9,7 +9,7 @@ python3 bpm_iq_viewer.py --bpm BPMZ1L2RP
 python3 bpm_iq_viewer.py --live --allow-writes
 ```
 
-Default mode is live safe: EPICS reads enabled, writes blocked.
+Default mode is live read-only: EPICS reads enabled, writes blocked. The normal way to unlock writes is the large green/red button in the main window; `--allow-writes` is retained only as a legacy shortcut to start already unlocked.
 
 ## Important PV Templates
 
@@ -34,7 +34,7 @@ scripts/starttbt: caput_many signals:ddc_raw.SCAN "1 second"; caput_many signals
 scripts/stoptbt:  caput_many signals:ddc_raw.SCAN "Passive";  caput_many signals:ddc_synth.SCAN "Passive"
 ```
 
-The GUI `TBT raw logging control...` window is narrower by design. It limits the reviewed BPM list, reads the current `.SCAN` status first, previews exact PV writes, and can schedule an auto-stop back to `Passive`. Safe/default mode still blocks all writes.
+The GUI `Raw TBT on/off + capture...` / `TBT raw logging control...` window is narrower by design. It limits the reviewed BPM list, reads the current `.SCAN` status first, previews exact PV writes, estimates capture storage, and can schedule an auto-stop back to `Passive`. Default mode blocks all writes until the main write button is unlocked; the TBT window has its own arm switch and every write still gets a confirmation dialog.
 
 ## Read-Only Probe Commands
 
@@ -61,7 +61,7 @@ Important files:
 - `raw_snapshots/*.npz`
 - `raw_bpm_logs/*.npz`
 
-Raw snapshots are bounded and intended for regression/debugging, not long-term archiving. Files in `raw_bpm_logs` are explicit operator-requested read-only captures from the TBT raw logging control window. They include complex button arrays, separate I/Q arrays, sum phasors, and `metadata_json`.
+Raw snapshots are bounded and intended for regression/debugging, not long-term archiving. Files in `raw_bpm_logs` are explicit operator-requested read-only captures from the TBT raw logging control window. They include complex button arrays, separate I/Q arrays, sum phasors, and `metadata_json`. Manual saves and raw captures are written via temporary files and atomic rename.
 
 ## CSR / THz Bursting Analysis
 
@@ -77,9 +77,12 @@ The GUI `Bursting analysis...` window reads saved `raw_bpm_logs/*.npz` captures 
 
 The analysis uses `f_sample = f_rev` from capture metadata/config for frequency and tune axes. It does not assume a DDC carrier frequency or convert phase into arrival time.
 
+Live plot windows also provide a `bursting` plot mode for immediate feedback on selected live BPMs/signals. It shows phase trace, phase PSD, a phase spectrogram for the first enabled trace, and 1-200 kHz band power.
+
 ## Plot Window Controls
 
 - `all`: default view; shows raw magnitude, unwrapped phase, phase spectrum, and magnitude spectrum.
+- `bursting`: shows live phase trace, phase PSD, phase spectrogram, and 1-200 kHz band power for selected signals.
 - `phase`: shows unwrapped phase plus phase spectrum.
 - `magnitude`: shows raw magnitude plus magnitude spectrum.
 - `spectra`: shows phase spectrum and magnitude spectrum together.

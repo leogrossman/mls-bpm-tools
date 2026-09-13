@@ -75,29 +75,24 @@ The `Tune status / spectrum peaks` pane lists:
 
 ## TBT Raw Logging
 
-In normal mode, TBT write buttons are blocked. Use `TBT raw logging control...` for the safer workflow:
+In normal mode, TBT write buttons are blocked. Use `Raw TBT on/off + capture...` or `TBT raw logging control...` for the safer workflow:
 
 1. Load the current BPM selection, or click `Suggest burst BPMs` for a small SSMB-oriented high/low dispersion set.
 2. Keep `max BPMs` small, usually 2-4 BPMs while other experiments are running.
 3. Click `Check selected status` before changing anything.
 4. Click `Preview start writes` and review every PV/value.
 5. Use `Capture raw arrays now` or `Start capture series` to save read-only raw BPM data. This works in normal read-only mode.
-6. Only in write-capable mode, turn on `Arm write mode`; the indicator turns red.
-7. Click `Start selected with auto-stop`.
-8. Confirm the EPICS writes in the warning dialog.
-9. Verify that the auto-stop setting is short enough for the study.
+6. If you intentionally need to start/stop raw TBT logging, click the large green `READ ONLY` button in the main window and confirm. It turns red.
+7. In the TBT window, turn on `Arm write mode`; the indicator turns red.
+8. Click `Start selected with auto-stop`.
+9. Confirm the EPICS writes in the warning dialog.
+10. Verify that the auto-stop setting is short enough for the study.
 
 The panel writes only the selected BPMs, unlike the original shell scripts which used `caput_many` broadly. The start command writes:
 
 ```text
 {bpm}:signals:ddc_raw.SCAN
 {bpm}:signals:ddc_synth.SCAN
-```
-
-Only with explicit operator agreement:
-
-```bash
-python3 bpm_iq_viewer.py --live --allow-writes
 ```
 
 Start writes `"1 second"` and stop writes `"Passive"` to both raw and synth `.SCAN` PVs.
@@ -110,11 +105,15 @@ Read-only raw captures are saved here:
 .mls_bpm_local/logs/session_YYYYMMDD_HHMMSS/raw_bpm_logs/*.npz
 ```
 
-Each file contains complex arrays, separate I/Q arrays, a sum phasor per BPM, and `metadata_json`.
+Each file contains complex arrays, separate I/Q arrays, a sum phasor per BPM, and `metadata_json`. Captures are written through a temporary file and atomically renamed so a crash during saving should not leave a partial final `.npz`.
+
+The TBT window shows an uncompressed planning estimate for one capture, the requested capture series, and 10 minutes at the chosen interval. Actual `.npz` files can be smaller because they are compressed.
 
 ## CSR / THz Bursting Analysis
 
 Use `Bursting analysis...` after saving one or more raw captures. The analysis window is read-only and can load the latest `.npz` capture automatically.
+
+For immediate live feedback in a plot window, choose plot type `bursting`. It shows the selected signal phase trace, phase PSD, spectrogram, and 1-200 kHz band power for the BPMs/signals already enabled in that window.
 
 Useful first pass:
 

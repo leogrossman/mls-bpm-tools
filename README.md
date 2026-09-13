@@ -11,7 +11,7 @@ git pull
 python3 bpm_iq_viewer.py
 ```
 
-No plot opens automatically. Click a BPM marker in the top lattice strip or double-click a BPM row to open a viewer. Machine writes are blocked unless you explicitly run `python3 bpm_iq_viewer.py --live --allow-writes`.
+No plot opens automatically. Click a BPM marker in the top lattice strip or double-click a BPM row to open a viewer. Machine writes are blocked until you explicitly unlock the large green `READ ONLY` button in the main window.
 
 ## Demo On A Non-Control-Room Machine
 
@@ -59,12 +59,13 @@ That command is live read-only safe mode, not demo mode.
 ## Current Safe Defaults
 
 - `python3 bpm_iq_viewer.py` uses live EPICS reads and blocks all writes.
-- TBT start/stop buttons only write in `--live --allow-writes`, after a confirmation dialog.
-- The `TBT raw logging control...` window is visible in read-only mode, limits raw logging to a reviewed small BPM set, supports an SSMB high/low dispersion suggestion, checks `.SCAN` status, captures raw arrays to `.npz`, previews writes, and can auto-stop back to `Passive`.
-- Write-capable TBT start/stop requires both `--live --allow-writes` at startup and the red `Arm write mode` toggle inside the TBT control window.
+- The main window has a large green/red write-mode button. Green means writes are locked; red means write-capable mode is unlocked for this GUI session.
+- TBT start/stop still requires the limited raw-TBT window, the red `Arm write mode` toggle inside that window, and a final exact-command confirmation dialog.
+- The `Raw TBT on/off + capture...` / `TBT raw logging control...` window is visible in read-only mode, limits raw logging to a reviewed small BPM set, supports an SSMB high/low dispersion suggestion, checks `.SCAN` status, captures raw arrays to atomic `.npz` files, estimates capture storage, previews writes, and can auto-stop back to `Passive`.
 - The `Bursting analysis...` window works offline on saved `.npz` captures and provides Welch spectra, spectrograms, band power, cross-BPM coherence, and high-/low-dispersion comparison aids without adding machine writes.
 - Optional tune/noise/status PVs are not read on startup.
 - Plot windows default to the `all` view with `A+B+C+D` first, then `A`; this shows raw magnitude, phase, phase spectrum, and magnitude spectrum.
+- Plot windows also include a live `bursting` view with phase trace, phase PSD, spectrogram, and 1-200 kHz band power for the currently selected BPM/signals.
 - Spectrum traces are normalized and visually stacked by default so multiple BPMs/signals can be compared without one trace hiding the rest.
 - The plot side pane lists tune PV status, valid tune/harmonic markers, and automatically detected spectrum peaks in the selected frequency units.
 - Live plots default to a 3 second refresh and show a load/performance line with PV count, sample count, processed bytes, elapsed time, and lag status.

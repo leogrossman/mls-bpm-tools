@@ -7,11 +7,11 @@ It follows the control-room conventions already used in `betagui`:
 - Python 3.9
 - Tkinter + Matplotlib
 - `pyepics`
-- `--safe` mode
+- live read-only default mode
 - explicit confirmation before every write
 - standalone files that can be copied to the control-room machine
 
-This is **not yet an operator-certified application**. It now starts in synthetic demo mode unless you explicitly request live EPICS reads. Start in demo mode, then read-only safe mode, and only then test writes with an operator.
+This is **not yet an operator-certified application**. The normal control-room command starts with live EPICS reads and all writes locked. Use demo mode explicitly when running away from EPICS.
 
 ## Files
 
@@ -21,21 +21,19 @@ This is **not yet an operator-certified application**. It now starts in syntheti
 
 ## Run
 
-Outside the control room:
+On the control-room machine, with live reads and all writes locked:
 
 ```bash
 python3 bpm_iq_viewer.py
-# equivalent:
+```
+
+Outside the control room:
+
+```bash
 python3 bpm_iq_viewer.py --demo
 ```
 
-On the control-room machine, with live reads but all writes blocked:
-
-```bash
-python3 bpm_iq_viewer.py --safe
-```
-
-This preselects known BPMs and opens an initial raw A/B/C/D button plot. Add `--no-startup-plot` if you want the old empty workspace.
+No plot opens automatically. Click a BPM marker or double-click a BPM row.
 
 Open several BPMs immediately:
 
@@ -48,10 +46,10 @@ python3 bpm_iq_viewer.py --safe \
 Write-capable mode still asks for a confirmation dialog showing the exact PV/value pairs:
 
 ```bash
-python3 bpm_iq_viewer.py --live --allow-writes
+python3 bpm_iq_viewer.py
 ```
 
-`--allow-writes` is rejected unless `--live` is also present. It is also rejected with `--safe` or `--demo`.
+Then click the large green `READ ONLY` button in the main window. It turns red only after an explicit warning confirmation. Turning it red does not write anything by itself; TBT start/stop still requires the limited BPM list, the TBT window arm switch, and a final exact-command confirmation dialog.
 
 ## Current functionality
 
@@ -60,7 +58,7 @@ The main window provides:
 1. Searchable multi-select BPM list.
 2. Open one plot window for one or many BPMs.
 3. Enable selected BPM records or all BPM records.
-4. Preview the exact write commands without executing them.
+4. Open `Raw TBT on/off + capture...` to check `.SCAN` state, preview exact writes, capture raw arrays in read-only mode, and start/stop a limited BPM set only after unlocking write mode.
 5. Open a simple clickable lattice view.
 6. Edit the raw BPM PV templates from the GUI if the configured names are wrong.
 7. Open `PV probe / edit IDs` to generate and check read-only PV candidates with `caget`/`cainfo`.
@@ -92,10 +90,11 @@ Available plots:
 - phase spectrum
 - magnitude spectrum
 - phase and magnitude spectra together
+- live bursting view with phase trace, phase PSD, spectrogram, and 1-200 kHz band power
 - uncalibrated position-like ratio
 - combined four-panel overview
 
-Data can be saved as a compressed NumPy `.npz` archive.
+Data can be saved as a compressed NumPy `.npz` archive. Raw captures and manual saves use atomic temporary files so a crash during saving does not leave a half-written final capture.
 
 ## Logs
 
@@ -127,16 +126,21 @@ The initial templates reproduce the MATLAB naming pattern:
 ...
 ```
 
-The enable operation plans:
+The limited raw-TBT start operation plans:
 
 ```text
 PV: {bpm}:signals:ddc_raw.SCAN
-value: I/O Intr
+PV: {bpm}:signals:ddc_synth.SCAN
+value: 1 second
 ```
 
-The write is never silently executed. In demo and `--safe` modes it is impossible. In `--live --allow-writes` mode the GUI displays the exact list and asks for confirmation.
+The stop operation writes both scan PVs back to:
 
-Before live use, verify whether the actual Python EPICS client accepts the enum string `I/O Intr`. Some installations may require an enum index or another exact spelling.
+```text
+Passive
+```
+
+The write is never silently executed. With the main window in green read-only mode it is blocked. With the main window red and the TBT window armed, the GUI still displays the exact list and asks for confirmation.
 
 Configured tune marker PVs:
 
@@ -173,7 +177,7 @@ cainfo BBQRP:X:DRIVEO
 caget -t TUNEZRP:measX
 ```
 
-The GUI PV probe runs the same kind of checks and logs every OK/error result. Edit wrong IDs in the table, click `Save config`, and rerun `python3 bpm_iq_viewer.py --safe`.
+The GUI PV probe runs the same kind of checks and logs every OK/error result. Edit wrong IDs in the table, click `Save config`, and rerun `python3 bpm_iq_viewer.py`.
 
 ## Physics: what one complex BPM value means
 

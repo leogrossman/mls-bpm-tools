@@ -22,6 +22,7 @@ from bpm_core import (
     decimation_stride,
     dispersion_response_score,
     estimate_iq_payload,
+    estimate_raw_capture_storage,
     find_spectrum_peaks,
     human_bytes,
     limited_unique_bpms,
@@ -90,7 +91,7 @@ class BPMIQViewerTest(unittest.TestCase):
 
         self.assertTrue(use_live)
         self.assertFalse(can_write)
-        self.assertIn("LIVE SAFE", label)
+        self.assertIn("LIVE READ-ONLY", label)
 
     def test_demo_runtime_is_explicit(self):
         parser = build_arg_parser()
@@ -162,6 +163,12 @@ class BPMIQViewerTest(unittest.TestCase):
         self.assertEqual(payload["samples"], 131072.0)
         self.assertEqual(payload["bytes"], 1048576.0)
         self.assertEqual(human_bytes(payload["bytes"]), "1.0 MiB")
+
+    def test_raw_capture_storage_estimate_matches_saved_arrays(self):
+        storage = estimate_raw_capture_storage(n_bpms=2, n_samples=8192, n_captures=10)
+
+        self.assertEqual(storage["bytes_per_bpm_sample"], 144.0)
+        self.assertEqual(storage["bytes"], 2 * 8192 * 10 * 144.0)
 
     def test_decimation_stride_limits_display_points(self):
         self.assertEqual(decimation_stride(1000, 2500), 1)
