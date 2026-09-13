@@ -2383,7 +2383,8 @@ class BPMViewer:
         self.write_unlock_available = write_unlock_available
         self.session = session
         self.root.title("MLS BPM I/Q Viewer")
-        self.root.geometry("1120x820")
+        self.root.geometry("1180x780")
+        self.root.minsize(960, 680)
         self.selected: List[str] = []
         self.status_after_id: Optional[str] = None
         self._last_status_values: Dict[str, str] = {}
@@ -2400,21 +2401,22 @@ class BPMViewer:
 
         topbar = ttk.Frame(main)
         topbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        topbar.columnconfigure(0, weight=1)
         ttk.Label(
             topbar,
             text="Click a BPM marker or double-click the BPM list to open live plots. Normal startup is read-only; unlock writes only for limited TBT start/stop actions.",
-            wraplength=700,
+            wraplength=760,
             justify=tk.LEFT,
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.write_mode_button = tk.Button(
             topbar,
             text="READ ONLY\nwrites locked",
-            width=18,
+            width=16,
             height=2,
             command=self.toggle_global_write_mode,
             relief=tk.GROOVE,
         )
-        self.write_mode_button.pack(side=tk.RIGHT, padx=(8, 0))
+        self.write_mode_button.grid(row=0, column=1, sticky="e")
         self.update_global_write_button()
 
         strip_box = ttk.LabelFrame(main, text="BPM lattice overview", padding=4)
@@ -2454,28 +2456,57 @@ class BPMViewer:
         self.listbox.bind("<<ListboxSelect>>", lambda _e: self.draw_bpm_strip())
         self.populate_bpms()
 
-        buttons = ttk.Frame(main)
-        buttons.grid(row=5, column=1, sticky="new", padx=(10, 0))
-        ttk.Button(buttons, text="Open selected plot", command=self.open_selected).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Select all BPMs", command=self.select_all_bpms).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Select visible/filter", command=self.select_visible_bpms).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Select known BPMs", command=self.select_known_bpms).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Clear selection", command=self.clear_bpm_selection).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Bursting analysis...", command=lambda: BurstAnalysisWindow(self)).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Raw TBT on/off + capture...", command=lambda: TBTControlWindow(self)).pack(fill=tk.X, pady=2)
-        ttk.Separator(buttons).pack(fill=tk.X, pady=8)
-        ttk.Button(buttons, text="TBT raw logging control...", command=lambda: TBTControlWindow(self)).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Open TBT start panel…", command=self.start_tbt_selected).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Stop TBT selected…", command=self.stop_tbt_selected).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Check TBT status", command=self.check_tbt_status).pack(fill=tk.X, pady=2)
-        ttk.Separator(buttons).pack(fill=tk.X, pady=8)
-        ttk.Button(buttons, text="Show planned TBT commands", command=self.preview_selected).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Refresh status PVs", command=self.refresh_status_pvs).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Save config", command=self.save_config).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Help / guide", command=self.show_help).pack(fill=tk.X, pady=2)
-        ttk.Button(buttons, text="Quit", command=root.destroy).pack(fill=tk.X, pady=2)
+        actions = ttk.LabelFrame(main, text="Actions", padding=4)
+        actions.grid(row=5, column=1, rowspan=8, sticky="nsew", padx=(10, 0))
+        action_tabs = ttk.Notebook(actions)
+        action_tabs.pack(fill=tk.BOTH, expand=True)
+
+        plot_tab = ttk.Frame(action_tabs, padding=6)
+        action_tabs.add(plot_tab, text="Plot")
+        ttk.Button(plot_tab, text="Open selected plot", command=self.open_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(plot_tab, text="Select visible/filter", command=self.select_visible_bpms).pack(fill=tk.X, pady=2)
+        ttk.Button(plot_tab, text="Select known BPMs", command=self.select_known_bpms).pack(fill=tk.X, pady=2)
+        ttk.Button(plot_tab, text="Select all BPMs", command=self.select_all_bpms).pack(fill=tk.X, pady=2)
+        ttk.Button(plot_tab, text="Clear selection", command=self.clear_bpm_selection).pack(fill=tk.X, pady=2)
+        ttk.Label(
+            plot_tab,
+            text="Tip: double-click a BPM row or click a lattice marker to open a live plot.",
+            wraplength=210,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(8, 0))
+
+        analysis_tab = ttk.Frame(action_tabs, padding=6)
+        action_tabs.add(analysis_tab, text="Analysis")
+        ttk.Button(analysis_tab, text="Bursting analysis...", command=lambda: BurstAnalysisWindow(self)).pack(fill=tk.X, pady=2)
+        ttk.Button(analysis_tab, text="Open lattice viewer", command=lambda: LatticeWindow(self)).pack(fill=tk.X, pady=2)
+        ttk.Button(analysis_tab, text="PV probe / edit IDs", command=lambda: PVProbeWindow(self)).pack(fill=tk.X, pady=2)
+        ttk.Button(analysis_tab, text="Refresh tune/status PVs", command=self.refresh_status_pvs).pack(fill=tk.X, pady=2)
+        ttk.Label(
+            analysis_tab,
+            text="Offline bursting analysis uses saved raw captures. Live plot windows also have a 'bursting' plot mode.",
+            wraplength=210,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(8, 0))
+
+        tbt_tab = ttk.Frame(action_tabs, padding=6)
+        action_tabs.add(tbt_tab, text="Raw TBT")
+        ttk.Button(tbt_tab, text="Raw TBT on/off + capture...", command=lambda: TBTControlWindow(self)).pack(fill=tk.X, pady=2)
+        ttk.Button(tbt_tab, text="Open TBT start panel…", command=self.start_tbt_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(tbt_tab, text="Stop selected now…", command=self.stop_tbt_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(tbt_tab, text="Check selected/all status", command=self.check_tbt_status).pack(fill=tk.X, pady=2)
+        ttk.Button(tbt_tab, text="Preview selected start writes", command=self.preview_selected).pack(fill=tk.X, pady=2)
+        ttk.Label(
+            tbt_tab,
+            text="Write actions stay blocked until the main write button is red and the TBT panel is armed.",
+            wraplength=210,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(8, 0))
+
+        app_tab = ttk.Frame(action_tabs, padding=6)
+        action_tabs.add(app_tab, text="App")
+        ttk.Button(app_tab, text="Save config", command=self.save_config).pack(fill=tk.X, pady=2)
+        ttk.Button(app_tab, text="Help / guide", command=self.show_help).pack(fill=tk.X, pady=2)
+        ttk.Button(app_tab, text="Quit", command=root.destroy).pack(fill=tk.X, pady=2)
 
         details = ttk.Notebook(main)
         details.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
@@ -2522,6 +2553,7 @@ class BPMViewer:
 
         main.rowconfigure(5, weight=1)
         main.columnconfigure(0, weight=1)
+        main.columnconfigure(1, minsize=260)
         self.status.set(f"{mode_label}. No plot is opened automatically; click a BPM marker or double-click a list row.")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 

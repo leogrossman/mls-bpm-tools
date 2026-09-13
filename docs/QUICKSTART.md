@@ -73,6 +73,13 @@ The `Tune status / spectrum peaks` pane lists:
 - automatically detected phase/magnitude spectrum peaks
 - the signal/BPM that produced each peak
 
+The main window action panel is tabbed:
+
+- `Plot`: open plots and manage BPM selection.
+- `Analysis`: bursting analysis, lattice viewer, PV probe, and tune/status refresh.
+- `Raw TBT`: guarded raw turn-by-turn on/off/status/capture actions.
+- `App`: save config, help, and quit.
+
 ## TBT Raw Logging
 
 In normal mode, TBT write buttons are blocked. Use `Raw TBT on/off + capture...` or `TBT raw logging control...` for the safer workflow:
